@@ -45,14 +45,19 @@ class AppWindow {
   /** 竖屏 / 横屏下窗口内容的目标尺寸（自动缩放到屏幕内） */
   static sizeFor(area, portrait, landscape) {
     const p = portrait || { w: 540, h: 960 };
+    // 留足边距：标题栏 38 + 上下各 24，左右各 40
     const availH = Math.max(360, (area.h || 1040) - TITLEBAR_H - 48);
     const availW = Math.max(300, (area.w || 1920) - 80);
-    if (landscape) {
-      const k = Math.min(availW / p.h, availH / p.w);
-      return { w: Math.round(p.h * k), h: Math.round(p.w * k) };
-    }
-    const k = Math.min(availH / p.h, availW / p.w);
-    return { w: Math.round(p.w * k), h: Math.round(p.h * k) };
+    const k = landscape
+      ? Math.min(availW / p.h, availH / p.w)
+      : Math.min(availH / p.h, availW / p.w);
+    const w = Math.round((landscape ? p.h : p.w) * k);
+    const h = Math.round((landscape ? p.w : p.h) * k);
+    // 双保险：绝不超过屏幕可用区，否则会被系统裁掉，看起来就是「有黑边 / 没填满」
+    return {
+      w: Math.max(320, Math.min(w, Math.round(availW))),
+      h: Math.max(360, Math.min(h, Math.round(availH))),
+    };
   }
 
   _area() {
@@ -294,21 +299,29 @@ class AppWindow {
     await sleep(1200);
     const area = this._area();
     const size = AppWindow.sizeFor(area, this.portrait, next);
-    if (!this.win.isMaximized()) {
-      this.win.setContentSize(Math.max(320, size.w), Math.max(420, size.h + TITLEBAR_H));
-      const b = this.win.getBounds();
-      this.win.setPosition(
-        Math.round(area.x + (area.w - b.width) / 2),
-        Math.round(area.y + (area.h - b.height) / 2),
-      );
-    }
+    // 最大化状态下 setContentSize 无效，必须先退出最大化再改尺寸，
+    // 否则窗口仍是竖的，横屏画面被塞进竖窗口 = 黑边 / 未填满。
+    const wasMax = this.win.isMaximized();
+    if (wasMax) this.win.unmaximize();
+    this.win.setContentSize(Math.max(320, size.w), Math.max(420, size.h + TITLEBAR_H));
+    const b = this.win.getBounds();
+    this.win.setPosition(
+      Math.round(area.x + (area.w - b.width) / 2),
+      Math.round(area.y + (area.h - b.height) / 2),
+    );
+    // 退出最大化后把窗口抬到最前，别被别的窗口盖住（盖住就是黑屏 / 点不动）
+    try { this.win.show(); this.win.focus(); } catch (_) { /* 窗口可能刚关 */ }
     this.state.landscape = next;
     this._push();
-    await sleep(300);
-    await this.fitNow();
-    // 应用重构后模拟器窗口可能再自己调一次，收尾再贴合一次免得留黑边
-    await sleep(900);
-    await this.fitNow();
+    // wm size 改了 guest framebuffer 尺寸后，Qt 会自己重排好几次；每次都可能把
+    // 嵌入窗口带回旧尺寸，露出黑边 / 画面没填满。连续贴合几轮收敛，之后由
+    // resize 事件的 scheduleFit 兜底。
+    for (let i = 0; i < 6; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await sleep(500);
+      // eslint-disable-next-line no-await-in-loop
+      await this.fitNow();
+    }
     return next;
   }
 

@@ -655,6 +655,22 @@ async function runLaunch(pkg) {
     const embedded = await appWin.embed();
     if (!embedded) appLog(`embed failed: ${appWin.lastEmbedError || 'unknown'}`);
     mark(`embedded=${embedded}`);
+    // 嵌入完成后把窗口从别的窗口底下抬出来。否则上层窗口（浏览器等）会盖住安卓画面，
+    // 用户看到的是「黑屏 / 画面没填满」，鼠标也点不到应用（全被上层窗口吃掉）。
+    // 短暂 topmost 再立刻撤销，只借用一次置顶把 Z 序抬到最前，不会长期霸占顶层。
+    if (appWin.isOpen) {
+      try {
+        appWin.win.show();
+        appWin.win.setAlwaysOnTop(true);
+        appWin.win.moveTop();
+        appWin.win.focus();
+        setTimeout(() => {
+          if (appWin.isOpen) {
+            try { appWin.win.setAlwaysOnTop(false); } catch (_) { /* 窗口已关 */ }
+          }
+        }, 700);
+      } catch (_) { /* 窗口可能刚关闭 */ }
+    }
     appWin.setState({ ready: true, tip: '' });
     // 嵌入失败（模拟器窗口还没建好）时再补两次：用户看到的是黑窗口，
     // 后台补上就恢复正常，不用让用户手动重开。

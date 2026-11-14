@@ -479,6 +479,19 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf, 'agent.ps1 缺少 UTF-8 BOM');
   });
 
+  // 模拟器窗口必须是 Chromium 渲染层的「子窗口」，不能是宿主的兄弟子窗口。
+  // 兄弟关系下 Electron 会持续把网页层抬到最前，黑底盖住安卓画面、鼠标全被吃掉
+  // （黑边 / 未填满 / 点击失效 / 点不动同意）。也不能再给嵌入窗口设 window region，
+  // 那会破坏命中测试且在 resize 后露出黑边。
+  await test('嵌入窗口必须挂到网页层之下，且不能再设 window region', () => {
+    const file = path.join(__dirname, '..', 'src', 'core', 'win', 'agent.ps1');
+    const src = fs.readFileSync(file, 'utf8');
+    assert(/SetParent\(emu, parent\)/.test(src), 'embed 必须挂到 FindChromeRender 找到的父窗口');
+    assert(/FindChromeRender\(host\)/.test(src), '必须查找 Chromium 渲染子窗口');
+    assert(!/CreateRectRgn\(0, clipTop/.test(src), '不能给嵌入窗口设裁剪 region');
+    assert(/SetWindowRgn\(emu, IntPtr\.Zero/.test(src), 'embed 时要清掉旧版本残留的 region');
+  });
+
   await test('新版 emulator 写的 ram.bin 必须被认作完整快照（否则刚存好的 3GB 会被当空壳删掉）', () => {
     const { EmulatorEngine } = require('../src/core/emulator');
     const emu = new EmulatorEngine(path.join(__dirname, '..'));
