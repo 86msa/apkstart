@@ -1281,6 +1281,18 @@ class Runtime {
    *
    * @returns {Promise<{ok:boolean,reason:string,ip?:string,gateway?:string}>}
    */
+  /**
+   * 把「已保存但不会自动连」的 AndroidWifi 连上（非破坏性，不重启、不清数据）。
+   * 具体实现与实机原因见 emulator.repairWifi。
+   *
+   * @returns {Promise<boolean>} 是否已连上
+   */
+  async repairWifi(adbPath = '') {
+    if (this.backend && this.backend.id !== 'builtin') return false;
+    const adb = adbPath || (typeof this.adbPath === 'function' ? this.adbPath() : '');
+    return this.emulator.repairWifi(adb).catch(() => false);
+  }
+
   async waitForNetwork({ timeoutMs = 90000, onLog = () => {}, adbPath = '' } = {}) {
     // 第三方底座（MuMu 等）的网络是它自己桥接好的，没有 netsimd 那一套；
     // 只要 adb 在线并且能解析 DNS 就认为网络可用，不做耗时的 ping 循环。
@@ -1335,6 +1347,24 @@ class Runtime {
   async ensureNetwork({ onLog = () => {}, firstWaitMs = 25000, secondWaitMs = 90000 } = {}) {
     let net = await this.waitForNetwork({ onLog, timeoutMs: firstWaitMs });
     if (net && net.ok) return net;
+    // 先试便宜的办法：把「已保存但不会自动连」的 AndroidWifi 点一下。
+    // 这一步比冷启动、比清数据都轻几个数量级——不重启虚拟机、不动用户数据。
+    // 实机上这才是绝大多数「虚拟机没网」的真正原因（见 emulator.repairWifi 注释）。
+    if (!this._wifiRepairTried) {
+      this._wifiRepairTried = true;
+      onLog('虚拟机连不上 Wi-Fi，正在尝试重新连接…');
+      try {
+        const fixed = await this.emulator.repairWifi(this.adbPath());
+        if (fixed) {
+          net = await this.waitForNetwork({ onLog, timeoutMs: 15000 });
+          if (net && net.ok) {
+            onLog(`网络已恢复（${net.ip || ''}），正在保存可用状态，下次直接就好。`);
+            try { await this.emulator.saveSnapshotNow(this.adbPath(), { timeout: 90000 }); } catch (_) { /* ignore */ }
+            return net;
+          }
+        }
+      } catch (_) { /* 修复失败就走下面的重路径 */ }
+    }
     // 冷启动很贵（几十秒），一个进程里只做一次：否则每次点开应用都要重来一遍，
     // 用户感受到的就是「点开要等好几分钟」。
     if (this._netColdBootTried) return net;
@@ -1364,18 +1394,54 @@ class Runtime {
    */
   async repairNetwork({ onLog = () => {} } = {}) {
     try {
-      // 直接重置数据：这是实测唯一稳定能让这个镜像联网的办法。
-      // （先冷启动再等 3 分钟只是白等 —— 已有用户数据上的冷启动根本连不上 Wi-Fi。）
-      onLog('正在修复虚拟机网络：重置安卓数据并重新开机（应用清单会保留，点开时自动重装）…');
+      // 阶梯式修复，从最便宜的开始，能不丢数据就绝不丢：
+      //   1) 重新连一次 Wi-Fi（不重启、不动数据）
+      //   2) 冷启动（不加载快照，仍不动数据）
+      //   3) 最后才重置数据
+      onLog('正在修复虚拟机网络：先尝试重新连接 Wi-Fi（不影响已装应用）…');
+      if (!this.vmRunning) {
+        const boot0 = await this.ensure({ onLog });
+        if (!boot0 || !boot0.ok) {
+          return { ok: false, error: (boot0 && boot0.error) || '虚拟机没能启动', boot: false };
+        }
+      }
+      this._wifiRepairTried = true;
+      let fixed = false;
+      try { fixed = await this.emulator.repairWifi(this.adbPath()); } catch (_) { fixed = false; }
+      if (fixed) {
+        const net1 = await this.waitForNetwork({ onLog, timeoutMs: 30000 });
+        if (net1 && net1.ok) {
+          try { await this.emulator.saveSnapshotNow(this.adbPath(), { timeout: 90000 }); } catch (_) { /* ignore */ }
+          onLog(`网络已恢复（${net1.ip || ''}），已存好可用快照。`);
+          return { ok: true, network: net1, boot: true, wiped: false };
+        }
+      }
+      // 第 2 步：冷启动，绕开可能「没网」的快照
+      onLog('重新连接没成功，正在冷启动一次虚拟机（不加载快照，数据保留）…');
+      await this.stop({ graceful: false }).catch(() => {});
+      await new Promise((r) => setTimeout(r, 2500));
+      this.emulator.forceColdBootOnNextStart();
+      const boot = await this.ensure({ onLog });
+      if (!boot || !boot.ok) {
+        return { ok: false, error: (boot && boot.error) || '虚拟机没能启动', boot: false };
+      }
+      let network = await this.waitForNetwork({ onLog, timeoutMs: 90000 });
+      if (network && network.ok) {
+        try { await this.emulator.saveSnapshotNow(this.adbPath(), { timeout: 90000 }); } catch (_) { /* ignore */ }
+        onLog(`网络已恢复（${network.ip || ''}），已存好可用快照。`);
+        return { ok: true, network, boot: true, wiped: false };
+      }
+      // 第 3 步：还没网，只能重置数据了（会丢应用内数据）
+      onLog('仍然没有网络，正在重置安卓数据并重新开机（应用清单会保留，点开时自动重装）…');
       if (this.vmRunning) await this.stop({ graceful: false }).catch(() => {});
       // 给上一次的 qemu / netsimd 一点时间退干净，否则 -wipe-data 会撞 AVD 锁
       await new Promise((r) => setTimeout(r, 2500));
       this.emulator.forceWipeOnNextStart();
-      const boot = await this.ensure({ onLog });
-      if (!boot || !boot.ok) {
-        return { ok: false, error: (boot && boot.error) || '虚拟机没能启动', boot: false, wiped: true };
+      const boot2 = await this.ensure({ onLog });
+      if (!boot2 || !boot2.ok) {
+        return { ok: false, error: (boot2 && boot2.error) || '虚拟机没能启动', boot: false, wiped: true };
       }
-      const network = await this.waitForNetwork({ onLog, timeoutMs: 240000 });
+      network = await this.waitForNetwork({ onLog, timeoutMs: 240000 });
       if (network && network.ok) {
         // 立刻把「网络正常」的状态存成快照：下次恢复时网卡状态一起还原，
         // 否则关掉再开又会回到没网状态。

@@ -427,11 +427,32 @@ class Installer {
     // 结果 adb 设备在安装途中消失，直接变成「红果打不开」。
     // 启动路径上绝不能做这种破坏性动作，等不到就先启动，大不了页面暂时加载慢。
     if (rt.engine === 'emulator' || rt.engine === 'builtin') {
-      const net = await this.runtime.waitForNetwork({ onLog, timeoutMs: 20000 }).catch(() => null);
+      let net = await this.runtime.waitForNetwork({ onLog, timeoutMs: 20000 }).catch(() => null);
       if (net && net.ok) {
         onLog(`虚拟机网络就绪（${net.ip || ''}）`);
       } else {
-        onLog('虚拟机网络还没就绪，先启动应用（联网页面可能稍后才加载出来）');
+        // 等不到网络时，做一次**非破坏性**的补救：把「已保存但不会自动连」
+        // 的 AndroidWifi 点一下。它不重启虚拟机、不碰用户数据，只是拉起设置页
+        // 点一条已保存的热点，所以放在启动路径上是安全的。
+        // 实机上「虚拟机一直没网」绝大多数就是这个原因（见 emulator.repairWifi）。
+        onLog('虚拟机连不上 Wi-Fi，正在尝试重新连接…');
+        try {
+          // 注意：repairWifi 挂在 engine（this.runtime）上，不在 rt 上。
+          // rt 是 ensure() 的返回对象 { ok, client, engine, ... }，里面只有 client；
+          // 写成 rt.repairWifi 会是 undefined，一调就抛 TypeError 被 catch 吞掉，
+          // 表现就是「日志打了正在重连，但 1 毫秒后就说还是没网」。
+          const fixed = await this.runtime.repairWifi().catch(() => false);
+          if (fixed) {
+            net = await this.runtime.waitForNetwork({ onLog, timeoutMs: 15000 }).catch(() => null);
+            if (net && net.ok) onLog(`虚拟机网络已恢复（${net.ip || ''}）`);
+          }
+        } catch (e) {
+          // 不要把异常吞得无声无息：这条日志就是「重连到底跑没跑」的唯一证据。
+          onLog(`自动重连 Wi-Fi 失败：${e.message}`);
+        }
+        if (!net || !net.ok) {
+          onLog('虚拟机网络还没就绪，先启动应用（联网页面可能稍后才加载出来）');
+        }
       }
     }
     const settings = store.getSettings();

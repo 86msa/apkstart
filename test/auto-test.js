@@ -859,6 +859,62 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(order[0] === 'builtin', `auto 模式必须优先 builtin，实际第一是 ${order[0]}`);
   });
 
+  await test('虚拟机联网：AVD 必须开虚拟 Wi-Fi，且能主动重连「不会自动连」的热点', () => {
+    const root = path.join(__dirname, '..');
+    const emuJs = fs.readFileSync(path.join(root, 'src', 'core', 'emulator.js'), 'utf8');
+    const engineJs = fs.readFileSync(path.join(root, 'src', 'core', 'engine.js'), 'utf8');
+
+    // API 34 的 Play Store 镜像上网走 wlan0（netsim 虚拟 Wi-Fi），不是 eth0。
+    // config.ini 少了 hw.wifi，wlan0 就永远 NO-CARRIER，应用里一直「网络错误」。
+    assert(/['"]hw\.wifi=yes['"]/.test(emuJs), 'config.ini 必须写 hw.wifi=yes');
+
+    // 实机根因：AndroidWifi 会落成「Saved / Won't automatically connect」，
+    // 开机后不自动连接。shell 又没有 NETWORK_SETTINGS 权限，cmd wifi
+    // connect-network 会抛 SecurityException，所以只能走 UI 点一下。
+    assert(/async repairWifi/.test(emuJs), '需要有主动重连 Wi-Fi 的能力');
+    assert(/WIFI_SETTINGS/.test(emuJs), '重连需要拉起 Wi-Fi 设置页');
+    assert(/uiautomator dump/.test(emuJs), '重连要靠 uiautomator 找到热点再点');
+    // 连上之后还要把「联网验证」探针换成国内可达的端点，否则系统一直给网络打「!」，
+    // 部分应用据此判定离线、拒绝加载内容。
+    assert(/captive_portal_http_url/.test(emuJs), '需要把联网验证探针改成国内可达端点');
+    // 明令禁止用 connect-network 当主方案（权限不够，必然失败）。
+    // 只看真正的代码行——注释里提到它是在解释为什么不用。
+    const emuCode = emuJs.split('\n')
+      .map((l) => l.replace(/\/\/.*$/, ''))
+      .filter((l) => l.trim() && !/^\s*(\*|\/\*)/.test(l))
+      .join('\n');
+    assert(!/cmd wifi connect-network/.test(emuCode), 'shell 没有 connect-network 权限，不能用它');
+
+    // 修复必须从轻到重：先重连，再冷启动，最后才清数据
+    const repair = engineJs.slice(engineJs.indexOf('async repairNetwork'));
+    const repairBody = repair.slice(0, repair.indexOf('async ', 10) > 0 ? undefined : undefined);
+    assert(/repairWifi/.test(repairBody), 'repairNetwork 应先尝试轻量的 Wi-Fi 重连');
+    const wifiAt = repairBody.indexOf('repairWifi');
+    const wipeAt = repairBody.indexOf('forceWipeOnNextStart');
+    assert(wifiAt > -1 && wipeAt > -1 && wifiAt < wipeAt,
+      '顺序必须是：先重连 Wi-Fi，最后才重置数据（不能一上来就清用户数据）');
+
+    // ensureNetwork 也要先试轻量修复，别直接冷启动
+    const ensure = engineJs.slice(engineJs.indexOf('async ensureNetwork'));
+    const ensureBody = ensure.slice(0, ensure.indexOf('async repairNetwork'));
+    const eWifi = ensureBody.indexOf('repairWifi');
+    const eBoot = ensureBody.indexOf('_netColdBootTried');
+    assert(eWifi > -1 && eBoot > -1 && eWifi < eBoot,
+      'ensureNetwork 应先尝试重连 Wi-Fi，再考虑冷启动');
+
+    // 启动路径（installer）上也要做一次，否则每次点开应用都先吃一个「没网」的应用。
+    // 注意这里只允许非破坏性的 repairWifi，绝不能出现 ensureNetwork（会冷启动）。
+    const instJs = fs.readFileSync(path.join(root, 'src', 'core', 'installer.js'), 'utf8');
+    assert(/repairWifi/.test(instJs), '启动应用前应尝试修复 Wi-Fi');
+    assert(!/\.ensureNetwork\(/.test(instJs), '启动路径不能调 ensureNetwork（会停虚拟机冷启动）');
+    // 必须挂在 engine（this.runtime）上：rt 是 ensure() 的返回对象，只有 client。
+    // 写成 rt.repairWifi 会是 undefined，调用即抛错又被 catch 吞掉，等于没修。
+    assert(/this\.runtime\.repairWifi\(/.test(instJs), 'repairWifi 要挂在 engine（this.runtime）上');
+    assert(!/\brt\.repairWifi\(/.test(instJs), 'rt 是 ensure() 的返回对象，上面没有 repairWifi');
+    // engine 上这个转发方法必须真的存在，否则 installer 里调用同样是 undefined
+    assert(/async repairWifi\(/.test(engineJs), 'engine 必须实现 repairWifi 转发');
+  });
+
   await test('WinAgent.setHook(false) 在默认状态下不会拉起 PowerShell 代理', async () => {
     const { WinAgent } = require('../src/core/agent');
     const a = new WinAgent();
