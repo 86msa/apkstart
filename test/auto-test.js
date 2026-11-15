@@ -899,12 +899,13 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     }
   });
 
-  await test('FydeOS 底座：不嵌窗口、不假装能开机、连不上时说人话', async () => {
-    const { FydeosBackend } = require('../src/core/backends/fydeos');
+  await test('FydeOS 底座：Windows 也能用，但不嵌窗口、不假装能开机', async () => {
+    const { FydeosBackend, splitHost, detectVmHost } = require('../src/core/backends/fydeos');
     const b = new FydeosBackend(path.join(__dirname, '..'), {});
 
     assert(b.id === 'fydeos', 'id 必须是 fydeos（会写进设置，不能改）');
-    // ChromeOS 桌面是 Aura/Wayland，没有 HWND；硬说能嵌会让上层去 SetParent 一个空句柄
+    // FydeOS 的画面在它自己的桌面里（或虚拟机窗口里），不是某个安卓应用的 HWND。
+    // 硬说能嵌会让上层去 SetParent 一个空句柄。
     assert(FydeosBackend.embedCapable === false, 'FydeOS 不能窗口嵌入');
     assert((await b.windowTargets()).length === 0, '不能返回假的窗口句柄');
 
@@ -913,16 +914,40 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(!b.has('snapshot'), 'FydeOS 没有我们自己的快照');
     assert(!b.has('rotatePanel'), '面板方向由系统管');
 
-    // Windows 上必须明确拒绝，而不是半残地跑起来
+    // Windows 上必须能连「跑在虚拟机里的 FydeOS」，而不是一律拒绝。
+    // 关键：Windows 没有本机安卓，所以地址必须让用户填，且提示要能照着做。
     if (process.platform === 'win32') {
-      const c = await b.check();
-      assert(c.ok === false, 'Windows 上不应报告可用');
-      assert(/FydeOS/.test(c.reason), '拒绝理由要说明这是 FydeOS 专用底座');
+      const noHost = await b.check();
+      assert(noHost.ok === false, '没填地址时不应报告可用');
+      assert(/地址/.test(noHost.reason) || /adb/i.test(noHost.reason),
+        '没填地址时要提示去填地址（或先把 adb 部署好）');
+
+      // 填了地址之后就不该再因为「平台不对」被拒
+      const { execFileSync } = require('child_process');
+      let adbExists = false;
+      try { execFileSync('where', ['adb'], { timeout: 3000, windowsHide: true }); adbExists = true; } catch (_) { /* ignore */ }
+      const b2 = new FydeosBackend(path.join(__dirname, '..'), {});
+      b2.hostOverride = '127.0.0.1:5555';
+      b2.adbPath = adbExists ? 'adb' : path.join(__dirname, '..', 'runtime', 'platform-tools', 'adb.exe');
+      const withHost = await b2.check();
+      assert(!/只能在 FydeOS/.test(withHost.reason || ''),
+        'Windows 上填了地址就不该再以「平台不对」为由拒绝');
     }
+
+    // host:port 解析要稳（端口不写默认 5555；IPv6 方括号也要能吃）
+    assert(splitHost('127.0.0.1:5555').port === 5555);
+    assert(splitHost('192.168.1.7').port === 5555, '不写端口时默认 5555');
+    assert(splitHost('192.168.1.7').host === '192.168.1.7');
+    assert(splitHost('[::1]:5555').host === '::1', 'IPv6 方括号要正确解析');
+    assert(splitHost('') === null, '空字符串返回 null');
 
     // 探测不能抛异常（autoPick 会直接调它）
     const p = await b.probe();
     assert(p && typeof p.found === 'boolean', 'probe 必须返回 {found:boolean}');
+    if (process.platform === 'win32') {
+      const vm = detectVmHost();
+      assert(vm && typeof vm.found === 'boolean', 'detectVmHost 不能抛异常');
+    }
   });
 
   await test('虚拟机联网：AVD 必须开虚拟 Wi-Fi，且能主动重连「不会自动连」的热点', () => {

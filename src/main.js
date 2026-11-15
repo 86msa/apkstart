@@ -343,6 +343,15 @@ async function restartForOrientation(landscape) {
  */
 async function attachAppWindow() {
   if (!appWin || !appWin.isOpen) return false;
+  // 有些底座自己没有可嵌的画面窗口（典型：FydeOS —— 画面在它自己的桌面里，
+  // 或者在那台虚拟机的窗口里，不是某个安卓应用的 HWND）。
+  // 这种情况不要走嵌入/独立窗口那一套，否则会兜一圈 SetParent 失败、
+  // 日志里刷「attach failed」，用户还以为坏了。直接认作「画面已由底座自己显示」。
+  const be = runtime && runtime.backend;
+  if (be && be.embedCapable === false) {
+    appLog(`${be.label} 自己管理画面窗口，跳过接管`);
+    return true;
+  }
   const embedMode = displaySettings().windowEmbed !== false;
   if (!embedMode) {
     // 独立窗口不需要标题栏里那块区域了，直接让模拟器窗口自己露出来
@@ -726,7 +735,9 @@ async function runLaunch(pkg) {
     //      而 MuMu 这类窗口不是我们创建的 —— 在它还隐藏时 SetParent，
     //      Windows 会隐式清掉 WS_VISIBLE，之后它永远不会自己再显示（宿主里全黑）。
     const backend = runtime.backend;
-    if (backend && backend.id !== 'builtin' && typeof backend.windowReady === 'function') {
+    // 不能嵌窗口的底座（FydeOS）没有「等画面窗口出现」这回事，直接跳过这个门禁
+    if (backend && backend.id !== 'builtin' && backend.embedCapable !== false
+      && typeof backend.windowReady === 'function') {
       const ready = await backend.windowReady({
         isEmbedded: () => !!(appWin && appWin.lastEmbedOk),
       }).catch((e) => ({ ok: false, reason: e.message }));
