@@ -10,7 +10,7 @@ const crypto = require('crypto');
 const store = require('./store');
 const { parseApk } = require('./apk');
 const { ZipFile } = require('./zip');
-const { iconToIco, writeShortcut, removeShortcut, safeFileName } = require('./shortcut');
+const { iconToIco, writeShortcut, removeShortcut, safeFileName, shortcutExt } = require('./shortcut');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -80,20 +80,23 @@ class Installer {
   shortcutPath(app) {
     const s = store.getSettings();
     const dir = s.shortcutDir && s.shortcutDir.trim() ? s.shortcutDir : this.ctx.desktopDir;
-    return path.join(dir, `${safeFileName(app.label)}.lnk`);
+    return path.join(dir, `${safeFileName(app.label)}${shortcutExt()}`);
   }
 
   /**
    * 桌面 + 开始菜单两份。
    * Windows 搜索索引的是「开始菜单 \ 程序」里的 .lnk，只放桌面会搜不到；
    * 有些机器的桌面被 OneDrive 重定向，开始菜单这份也保证入口不丢。
+   *
+   * Linux（FydeOS）那边对应的是 freedesktop 的 .desktop：
+   * 桌面一份，应用菜单 ~/.local/share/applications 一份。
    */
   shortcutPaths(app) {
     const out = [this.shortcutPath(app)];
     if (this.ctx.startMenuDir && store.getSettings().createStartMenuShortcut !== false) {
       // 放在独立子目录：既能被 Windows 搜索索引到，又不会覆盖同名第三方应用的快捷方式
       // （实测「红果免费短剧」在开始菜单里已被另一个桌面助手占用）
-      out.push(path.join(this.ctx.startMenuDir, 'ApkStart', `${safeFileName(app.label)}.lnk`));
+      out.push(path.join(this.ctx.startMenuDir, 'ApkStart', `${safeFileName(app.label)}${shortcutExt()}`));
     }
     return [...new Set(out)];
   }
@@ -307,6 +310,9 @@ class Installer {
     const { target, baseArgs } = this.shortcutTarget();
     const args = `${baseArgs ? baseArgs + ' ' : ''}--launch "${app.package}"`.trim();
     const ico = app.icoPath && fs.existsSync(app.icoPath) ? app.icoPath : undefined;
+    // Linux 的 .desktop 只认 PNG/SVG 绝对路径，ICO 无效 —— 所以两条路径都传下去，
+    // 由 writeShortcut 按平台挑。（Windows 用 ico，FydeOS 用 png）
+    const png = app.iconPath && fs.existsSync(app.iconPath) ? app.iconPath : undefined;
     const paths = this.shortcutPaths(app);
 
     const write = (shortcutPath) => writeShortcut({
@@ -314,6 +320,7 @@ class Installer {
       target,
       args,
       iconIcoPath: ico,
+      iconPngPath: png,
       description: `${app.label} — 由 ApkStart 运行`,
       cwd: this.ctx.cwd,
       // 每个应用一个 AUMID：任务栏上按应用分组，不会全挤到 ApkStart 里
@@ -336,7 +343,7 @@ class Installer {
     // 主路径全失败（自定义快捷方式目录不可写 / 被安全软件拦截）：
     // 退回桌面再试一次——桌面上有图标，用户才找得到应用。
     if (!first) {
-      const fallback = path.join(this.ctx.desktopDir, `${safeFileName(app.label)}.lnk`);
+      const fallback = path.join(this.ctx.desktopDir, `${safeFileName(app.label)}${shortcutExt()}`);
       try {
         write(fallback);
         first = fallback;

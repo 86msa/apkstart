@@ -14,23 +14,30 @@
 const { Backend, CAPS } = require('./base');
 const { BuiltinBackend } = require('./builtin');
 const { MumuBackend } = require('./mumu');
+const { FydeosBackend } = require('./fydeos');
 
 const REGISTRY = [
   BuiltinBackend,
   MumuBackend,
+  FydeosBackend,
 ];
 
 /**
  * 自动挑选时的顺序（越靠前越优先）。
  *
- * **自带运行时必须排第一**。原因：用户机器上很可能装着 MuMu / 雷电 / 蓝叠，
- * 早期版本把 mumu 放在最前面，结果 ApkStart 悄悄接管了「别人家的模拟器」：
+ * **自带运行时在 Windows 上必须排第一**。原因：用户机器上很可能装着 MuMu / 雷电 /
+ * 蓝叠，早期版本把 mumu 放在最前面，结果 ApkStart 悄悄接管了「别人家的模拟器」：
  *   - 我们找不到自己那份 QEMU 窗口，嵌入/多窗口/旋转全部按错的底座走；
  *   - 用户点开 ApkStart 却发现跑的是 MuMu，数据、存档、镜像都不在自己以为的地方；
  *   - MuMu 一升级或换端口，ApkStart 就直接失效。
  * 所以第三方底座一律改成「只有用户在设置里显式选了才用」。
+ *
+ * 非 Windows（FydeOS / Linux）另当别论：那边根本没有 emulator.exe，
+ * 自带运行时跑不起来，系统自带的安卓子系统才是唯一合理的选择。
  */
-const AUTO_ORDER = ['builtin', 'mumu'];
+const AUTO_ORDER = process.platform === 'win32'
+  ? ['builtin', 'mumu']
+  : ['fydeos', 'builtin'];
 
 function byId(id) {
   return REGISTRY.find((B) => B.id === id) || null;

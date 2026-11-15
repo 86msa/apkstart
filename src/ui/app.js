@@ -733,6 +733,7 @@ function syncBackendFields() {
   const builtin = mode === 'builtin' || mode === 'attach';
   const show = (id, on) => { const el = $(id); if (el && el.closest('.field')) el.closest('.field').hidden = !on; };
   show('setMumuPath', mode === 'mumu');
+  show('setFydeosHost', mode === 'fydeos');
   show('setSystemImage', builtin);
   show('setMemory', builtin);
   show('setCores', builtin);
@@ -745,6 +746,7 @@ function syncBackendFields() {
 function fillSettings(s) {
   $('setEngineMode').value = s.engine.mode;
   if ($('setMumuPath')) $('setMumuPath').value = s.engine.mumuPath || '';
+  if ($('setFydeosHost')) $('setFydeosHost').value = s.engine.fydeosHost || '';
   syncBackendFields();
   $('setAdbPath').value = s.adbPath || '';
   $('setDevice').value = s.device || '';
@@ -979,6 +981,9 @@ function bindSettings() {
   });
   if ($('setMumuPath')) {
     $('setMumuPath').addEventListener('change', (e) => save({ engine: { mumuPath: e.target.value.trim() } }));
+  }
+  if ($('setFydeosHost')) {
+    $('setFydeosHost').addEventListener('change', (e) => save({ engine: { fydeosHost: e.target.value.trim() } }));
   }
   $('setAdbPath').addEventListener('change', (e) => save({ adbPath: e.target.value.trim() }));
   $('setDevice').addEventListener('change', async (e) => {

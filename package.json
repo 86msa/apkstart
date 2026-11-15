@@ -29,7 +29,8 @@
     "node": ">=20"
   },
   "os": [
-    "win32"
+    "win32",
+    "linux"
   ],
   "scripts": {
     "start": "electron .",
@@ -41,7 +42,32 @@
     "selftest": "node scripts/selftest.js",
     "assoc:on": "node scripts/assoc.js on",
     "assoc:off": "node scripts/assoc.js off",
-    "test:boot": "node test/boot-test.js"
+    "test:boot": "node test/boot-test.js",
+    "pack:linux": "electron-builder --linux AppImage"
+  },
+  "build": {
+    "appId": "com.routinemiku.apkstart",
+    "productName": "ApkStart",
+    "directories": {
+      "output": "dist-linux"
+    },
+    "files": [
+      "src/**/*",
+      "package.json",
+      "!src/ui/assets/*.jpg"
+    ],
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Utility",
+      "icon": "src/ui/assets/logo-128.png",
+      "desktop": {
+        "Name": "ApkStart",
+        "Comment": "在 FydeOS / Linux 上管理安卓应用",
+        "Categories": "Utility;"
+      }
+    }
   },
   "devDependencies": {
     "electron": "^33.4.11",

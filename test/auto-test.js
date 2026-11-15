@@ -856,7 +856,73 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     // 之前 mumu 排第一，导致启动后根本没开自己的模拟器、嵌入全失败。
     const order = backends.AUTO_ORDER;
     assert(Array.isArray(order), 'AUTO_ORDER 应该是个数组');
-    assert(order[0] === 'builtin', `auto 模式必须优先 builtin，实际第一是 ${order[0]}`);
+    // Windows 上 builtin 必须第一；非 Windows（FydeOS）没有 emulator.exe，fydeos 才合理
+    const expectFirst = process.platform === 'win32' ? 'builtin' : 'fydeos';
+    assert(order[0] === expectFirst, `auto 模式第一应该是 ${expectFirst}，实际是 ${order[0]}`);
+  });
+
+  await test('Linux 快捷方式：.desktop 要可执行、Exec 要转义、图标必须 PNG', () => {
+    const os = require('os');
+    const shortcut = require('../src/core/shortcut');
+    // Windows 上生成的是 .lnk，Linux 上必须是 .desktop（freedesktop 规范）
+    assert(shortcut.shortcutExt() === (process.platform === 'win32' ? '.lnk' : '.desktop'),
+      '快捷方式扩展名要跟平台走');
+
+    // 直接调 .desktop 写入器验证内容（不依赖当前平台）
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'apkstart-dt-'));
+    const out = path.join(dir, '测试 应用.desktop');
+    const png = path.join(dir, 'icon.png');
+    fs.writeFileSync(png, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    try {
+      shortcut.writeDesktopEntry({
+        shortcutPath: out,
+        target: '/opt/ApkStart/ApkStart',
+        args: '--launch "com.example.app"',
+        iconPngPath: png,
+        description: '测试应用',
+      });
+      assert(fs.existsSync(out), '.desktop 必须真的落盘');
+      const body = fs.readFileSync(out, 'utf8');
+      assert(/\[Desktop Entry\]/.test(body), '缺 Desktop Entry 段');
+      assert(/^Type=Application$/m.test(body), 'Type 必须是 Application');
+      // 带空格的路径不加引号会被拆成两个参数，直接启动失败
+      assert(/^Exec=.*"\/opt\/ApkStart\/ApkStart"/m.test(body), 'Exec 里的目标路径要加引号');
+      assert(/com\.example\.app/.test(body), 'Exec 要带上 --launch 的包名');
+      assert(/^Icon=.*icon\.png$/m.test(body), '图标要用 PNG 绝对路径（ICO 在 Linux 无效）');
+      // .desktop 不带执行位，很多桌面环境会当普通文档
+      if (process.platform !== 'win32') {
+        const mode = fs.statSync(out).mode & 0o777;
+        assert((mode & 0o100) !== 0, '.desktop 必须有可执行位');
+      }
+    } finally {
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) { /* ignore */ }
+    }
+  });
+
+  await test('FydeOS 底座：不嵌窗口、不假装能开机、连不上时说人话', async () => {
+    const { FydeosBackend } = require('../src/core/backends/fydeos');
+    const b = new FydeosBackend(path.join(__dirname, '..'), {});
+
+    assert(b.id === 'fydeos', 'id 必须是 fydeos（会写进设置，不能改）');
+    // ChromeOS 桌面是 Aura/Wayland，没有 HWND；硬说能嵌会让上层去 SetParent 一个空句柄
+    assert(FydeosBackend.embedCapable === false, 'FydeOS 不能窗口嵌入');
+    assert((await b.windowTargets()).length === 0, '不能返回假的窗口句柄');
+
+    // 安卓是系统的一部分：不能提供「装镜像 / 存快照 / 改面板方向」这些能力
+    assert(!b.has('provision'), 'FydeOS 不需要也不能部署镜像');
+    assert(!b.has('snapshot'), 'FydeOS 没有我们自己的快照');
+    assert(!b.has('rotatePanel'), '面板方向由系统管');
+
+    // Windows 上必须明确拒绝，而不是半残地跑起来
+    if (process.platform === 'win32') {
+      const c = await b.check();
+      assert(c.ok === false, 'Windows 上不应报告可用');
+      assert(/FydeOS/.test(c.reason), '拒绝理由要说明这是 FydeOS 专用底座');
+    }
+
+    // 探测不能抛异常（autoPick 会直接调它）
+    const p = await b.probe();
+    assert(p && typeof p.found === 'boolean', 'probe 必须返回 {found:boolean}');
   });
 
   await test('虚拟机联网：AVD 必须开虚拟 Wi-Fi，且能主动重连「不会自动连」的热点', () => {

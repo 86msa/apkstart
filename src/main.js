@@ -1742,8 +1742,11 @@ if (!gotLock) {
       cwd: l.cwd,
       isDev: IS_DEV,
       desktopDir: app.getPath('desktop'),
-      // Windows 搜索索引的是开始菜单里的 .lnk，只放桌面会「搜不到应用」
-      startMenuDir: path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
+      // Windows 搜索索引的是开始菜单里的 .lnk，只放桌面会「搜不到应用」；
+      // Linux（FydeOS）那边对应的是 freedesktop 的应用菜单目录。
+      startMenuDir: process.platform === 'win32'
+        ? path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs')
+        : path.join(process.env.HOME || app.getPath('home'), '.local', 'share', 'applications'),
       decodeIcon,
     });
     sharer = new Sharer(runtime);

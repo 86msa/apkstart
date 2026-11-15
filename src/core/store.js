@@ -17,9 +17,10 @@ const DEFAULT_SETTINGS = {
   adbPath: '',
   device: '127.0.0.1:5555',
   engine: {
-    mode: 'builtin',         // builtin（自带运行时，默认） | mumu（复用已装的 MuMu 模拟器） | attach（连接已有运行时，高级）
+    mode: 'builtin',         // builtin（自带运行时，默认） | mumu（复用已装的 MuMu 模拟器） | fydeos（FydeOS 自带安卓子系统） | attach（连接已有运行时，高级）
     mumuPath: '',            // MuMu 安装目录（留空 = 自动按注册表 / 常见路径查找）
     mumuIndex: 0,            // MuMu 多开实例索引，默认 0 号
+    fydeosHost: '',          // FydeOS 安卓子系统地址（留空 = 依次试 arc:5555 / 100.115.92.2:5555 / 127.0.0.1:5555）
     qemuPath: '',
     systemImage: '',
     memoryMB: 0,             // 0 = 由 doctor 按机器内存自动决定
