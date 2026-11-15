@@ -899,6 +899,108 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     }
   });
 
+  await test('横屏必须「正立」：面板定方向、rotation 锁 0、忽略应用的方向请求', () => {
+    const root = path.join(__dirname, '..');
+    const adbJs = fs.readFileSync(path.join(root, 'src', 'core', 'adb.js'), 'utf8');
+
+    // 实机踩出来的三段式（缺任何一段画面都会躺倒 90°）：
+    //  1) 物理面板换方向（hw.lcd.width/height 互换 + 重启）—— 见 doctor.lcdFor
+    //  2) 逻辑方向锁 **0**：面板已经是横的，再锁 1 会把横面板转成竖逻辑空间
+    //  3) 忽略应用自己的方向请求：红果这类应用声明 portrait，系统照办后
+    //     init=1280x720 的横面板会变成 cur=720x1280 的竖逻辑空间
+    const setOri = adbJs.slice(adbJs.indexOf('async setOrientation'), adbJs.indexOf('async resetDisplayOverrides'));
+    assert(/wm user-rotation lock 0/.test(setOri),
+      'setOrientation 必须锁 rotation 0（锁 1 会让横面板躺倒）');
+    assert(!/user-rotation lock \$\{landscape \? 1/.test(setOri),
+      '不能再按 landscape 锁 1 —— 那是「只有竖面板可旋转」时代的写法');
+    assert(/wm set-ignore-orientation-request/.test(setOri),
+      '必须忽略应用的屏幕方向请求，否则竖屏锁定的应用会躺倒');
+
+    const reset = adbJs.slice(adbJs.indexOf('async resetDisplayOverrides'));
+    assert(/wm user-rotation lock 0/.test(reset.slice(0, 800)), 'resetDisplayOverrides 也要锁 0');
+    assert(/wm set-ignore-orientation-request/.test(reset.slice(0, 800)),
+      'resetDisplayOverrides 也要按模式设置 ignore-orientation');
+  });
+
+  await test('关闭应用必须有入口：右键菜单 + 托盘 + IPC 一个都不能少', () => {
+    const root = path.join(__dirname, '..');
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    const preloadJs = fs.readFileSync(path.join(root, 'src', 'preload.js'), 'utf8');
+    const uiJs = fs.readFileSync(path.join(root, 'src', 'ui', 'app.js'), 'utf8');
+
+    // 主进程要有 app:stop（以前压根没有，endApp 只在窗口关闭时触发，
+    // 而独立窗口模式那个窗口是隐藏的 → 应用一起来就关不掉）
+    assert(/ipcMain\.handle\('app:stop'/.test(mainJs), '缺少 app:stop IPC');
+    // 渲染进程要能调到
+    assert(/stop:\s*\(pkg\)\s*=>\s*invoke\('app:stop'/.test(preloadJs), 'preload 要暴露 stop');
+    // 右键菜单要有这一项
+    assert(/key:\s*'stop'/.test(uiJs), '右键菜单缺少「关闭应用」');
+    assert(/case 'stop':/.test(uiJs), '右键菜单没有处理 stop');
+    // 独立窗口模式主界面是隐藏的，托盘是唯一随时可达的入口
+    assert(/关闭当前应用/.test(mainJs), '托盘菜单缺少「关闭当前应用」');
+    // 关掉后要刷新「运行中」标记
+    assert(/apps:changed/.test(mainJs) && /apps:changed/.test(uiJs),
+      '关闭后要发 apps:changed 并让界面刷新');
+
+    // 修复：托盘和 IPC 必须共用同一条 stopApp 路径，不在两处写同样的逻辑
+    assert(/async function stopApp/.test(mainJs), '必须有统一的 stopApp 函数');
+    assert(/ipcMain\.handle\('app:stop'[\s\S]{0,200}stopApp/.test(mainJs),
+      'app:stop IPC 必须委托给 stopApp');
+    assert(/stopApp\(pkg\)\.then/.test(mainJs) || /stopApp\(pkg\)/.test(mainJs),
+      '托盘菜单也必须调 stopApp');
+    // 关闭后必须清 currentAppPkg，否则托盘还显示「关闭当前应用（xxx）」
+    assert(/currentAppPkg === target/.test(mainJs) || /currentAppPkg = null/.test(mainJs),
+      'stopApp 必须清 currentAppPkg');
+    // 独立窗口模式必须先藏模拟器窗口再关壳窗口（反了会在桌面闪一下）
+    assert(/detached[\s\S]{0,200}agent\.hide/.test(mainJs),
+      '独立窗口模式先 hide 再 close');
+    // 外部关闭（Alt+F4）也要清 currentAppPkg
+    assert(/onCloseApp[\s\S]{0,300}currentAppPkg = null/.test(mainJs) || /onCloseApp[\s\S]{0,300}currentAppPkg === pkg/.test(mainJs),
+      'onCloseApp 也要清 currentAppPkg');
+  });
+
+  await test('自动全屏和横屏必须是活的：设置项得有消费方，且启动时校正面板方向', () => {
+    const root = path.join(__dirname, '..');
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    const htmlJs = fs.readFileSync(path.join(root, 'src', 'ui', 'index.html'), 'utf8');
+    const uiJs = fs.readFileSync(path.join(root, 'src', 'ui', 'app.js'), 'utf8');
+    const emuJs = fs.readFileSync(path.join(root, 'src', 'core', 'emulator.js'), 'utf8');
+
+    // autoFullscreenOnLaunch 以前只在默认设置里声明，没有任何代码读它 —— 死开关。
+    const uses = (mainJs.match(/autoFullscreenOnLaunch/g) || []).length;
+    assert(uses > 0, 'autoFullscreenOnLaunch 必须真的被读（不能只是声明）');
+    assert(/fullscreen:[\s\S]{0,200}autoFullscreenOnLaunch/.test(mainJs),
+      '自动全屏要参与 openAppWindow 的 fullscreen 判定');
+
+    // 设置页要能改这两项
+    assert(/setAutoFullscreen/.test(htmlJs), '设置页缺少「自动全屏」开关');
+    assert(/setLandscape/.test(htmlJs), '设置页缺少「屏幕方向」开关');
+    assert(/setAutoFullscreen'\)\.addEventListener/.test(uiJs), '自动全屏开关没接事件');
+    assert(/setLandscape'\)\.addEventListener/.test(uiJs), '屏幕方向开关没接事件');
+
+    // 横屏只能靠物理面板 + 重启；启动时必须先校正，否则会躺倒
+    assert(/panelLandscape/.test(emuJs), 'emulator 需要能读出当前面板方向');
+    assert(/orientation mismatch/.test(mainJs), '启动前要检查面板方向是否与设置一致');
+    assert(/reloadApp:\s*false/.test(mainJs), '校正方向时不能顺手再启动一次应用（会重复拉起）');
+
+    // 独立窗口模式下「全屏」要作用在模拟器窗口上，maximize 一个隐藏窗口没有意义
+    const appwinJs = fs.readFileSync(path.join(root, 'src', 'core', 'appwin.js'), 'utf8');
+    assert(/_wantFullscreen/.test(appwinJs), '独立窗口模式要记住全屏意图');
+    assert(/if \(this\._wantFullscreen\)/.test(appwinJs), 'openDetached 要按全屏铺满可用区');
+
+    // 修复：重启运行时后旧 rt.client 失效，beforeStart 必须返回新的 rt
+    const instJs = fs.readFileSync(path.join(root, 'src', 'core', 'installer.js'), 'utf8');
+    assert(/beforeStart[\s\S]{0,400}replaced[\s\S]{0,200}replaced\.client/.test(instJs),
+      'installer.launch 要接受 beforeStart 返回的新 rt');
+    assert(/return newRt/.test(mainJs) || /return rt/.test(mainJs.slice(mainJs.indexOf('restartForOrientation'))),
+      'restartForOrientation 要返回新的 rt 给 beforeStart');
+
+    // 修复：独立窗口模式横屏时 _panelRatio 要按面板方向校正
+    assert(/this\.state\.landscape.*b\.height > b\.width/.test(appwinJs)
+      || /landscape.*height.*width/.test(appwinJs),
+      '_panelRatio 横屏时要校正比值');
+  });
+
   await test('点开应用要尽早出画面：进程一出现就接窗口，不等 4 秒观察期', () => {
     const root = path.join(__dirname, '..');
     const instJs = fs.readFileSync(path.join(root, 'src', 'core', 'installer.js'), 'utf8');

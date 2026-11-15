@@ -197,6 +197,29 @@ class EmulatorEngine {
    * 下一次启动就会 FATAL "Running multiple emulators with the same AVD"。
    * 按「AVD 锁里的 pid」+「命令行带本 AVD 名的 qemu/emulator」两个来源清。
    */
+  /**
+   * 当前 AVD 面板是横的还是竖的。
+   *
+   * 为什么要问这个：横屏**只能靠物理面板**实现 —— `wm size` 只改逻辑分辨率，画面会
+   * 躺倒 90°；`adb emu rotate` 只转内容，系统里还是竖屏。真正生效的是
+   * `hw.lcd.width/height` 互换 + 重启。而 config.ini 是每次开机时按当时的设置写的，
+   * 所以读它就知道**现在跑着的这台**是什么方向。
+   *
+   * @returns {boolean|null} true=横屏面板，false=竖屏面板，null=读不到
+   */
+  panelLandscape() {
+    try {
+      const avdDir = path.join(this.provisioner.paths().avdHome, `${AVD_NAME}.avd`);
+      const cfg = fs.readFileSync(path.join(avdDir, 'config.ini'), 'utf8');
+      const w = Number((/^hw\.lcd\.width=(\d+)$/m.exec(cfg) || [])[1]);
+      const h = Number((/^hw\.lcd\.height=(\d+)$/m.exec(cfg) || [])[1]);
+      if (!w || !h) return null;
+      return w > h;
+    } catch (_) {
+      return null;
+    }
+  }
+
   async killOrphanProcesses({ onLog = () => {} } = {}) {
     if (process.platform !== 'win32') return 0;
     const avdDir = path.join(this.provisioner.paths().avdHome, `${AVD_NAME}.avd`);

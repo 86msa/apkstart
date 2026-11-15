@@ -419,7 +419,12 @@ class Installer {
       throw err;
     }
     // 分辨率要在拉起应用之前改，避免 wm size 触发配置变更把刚启动的 Activity 重建
-    if (beforeStart) await beforeStart(rt).catch((e) => onLog(`显示适配跳过：${e.message}`));
+    if (beforeStart) {
+      const replaced = await beforeStart(rt).catch((e) => { onLog(`显示适配跳过：${e.message}`); return null; });
+      // beforeStart 可以返回一个新的 rt（重启运行时后旧 client 已失效），
+      // 后续全部用新的。不返回就继续用原来的。
+      if (replaced && replaced.client) rt = replaced;
+    }
     // 清掉旧版本可能残留在 /data 里的 wm size / density 覆盖与自动旋转设置。
     // 这些覆盖是持久化的，不清理的话每次启动画面都会被转 90° 躺倒、留黑边、
     // 鼠标点击也无法对应（用户反馈的「旋转黑边 / 未填满 / 点不动同意」）。

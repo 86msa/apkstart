@@ -303,7 +303,7 @@ function refreshPointerMapping() {
  *   - adb emu rotate：只转画面内容，系统里还是竖屏。
  * 只有把 hw.lcd.width/height 换成横屏并重启，Qt 才会按横屏面板开窗口、画面正立铺满。
  */
-async function restartForOrientation(landscape) {
+async function restartForOrientation(landscape, { reloadApp = true } = {}) {
   if (!appWin || !appWin.isOpen) return false;
   const pkg = appWin.pkg;
   store.saveSettings({ display: { landscape: !!landscape } });
@@ -318,17 +318,19 @@ async function restartForOrientation(landscape) {
     });
     if (!rt || !rt.ok) return false;
     await runtime.waitForNetwork({ onLog: () => {}, timeoutMs: 25000 }).catch(() => null);
-    if (pkg) {
+    // reloadApp=false：调用方（runLaunch）自己会把应用拉起来，这里别抢着做一遍
+    if (reloadApp && pkg) {
       const app = store.getApp(pkg);
       if (app) {
         await rt.client.install(app.apkPath).catch(() => {});
         await rt.client.startApp(app.package, app.activity, {}).catch(() => {});
       }
+      await new Promise((r) => setTimeout(r, 1500));
+      await attachAppWindow();
+      appWin.scheduleFit(6);
     }
-    await new Promise((r) => setTimeout(r, 1500));
-    const embedded = await attachAppWindow();
-    appWin.scheduleFit(6);
-    return true;
+    // 返回新的 rt：beforeStart 拿到后会替换掉旧的（旧 client 已随 stop 失效）
+    return rt;
   } catch (e) {
     appLog(`rotate restart failed: ${e && e.message}`);
     return false;
@@ -376,7 +378,10 @@ function openAppWindow(pkg, tip) {
     iconPath: rec && rec.icoPath,
     // 横屏时窗口按横比例开，否则竖窗口里塞横画面会留出大片黑边
     portrait: land ? { w: p0.h, h: p0.w } : p0,
-    fullscreen: displaySettings().mode === 'fullscreen',
+    // 全屏有两种来路：显式选了「全屏」模式，或者勾了「启动时自动全屏」。
+    // 后者以前是个死开关（只在默认设置里声明，没有任何代码读它），这里补上。
+    fullscreen: displaySettings().mode === 'fullscreen'
+      || displaySettings().autoFullscreenOnLaunch === true,
     detached: displaySettings().windowEmbed === false,
   });
   appWin.setIcon(rec && rec.icoPath);
@@ -571,6 +576,17 @@ function buildTray() {
   }
   const refresh = () => {
     const apps = store.getApps().slice(0, 8);
+    // 独立窗口模式主界面是隐藏的，托盘就成了唯一随时可达的入口 ——
+    // 「关闭当前应用」必须放这里，否则用户根本没法关掉正在跑的应用。
+    // 判断「有没有应用在跑」要同时看 currentAppPkg 和 runtime.activeApps：
+    // endApp 会从 activeApps 里删掉包名，所以关掉后这里自动变 false。
+    // 但 currentAppPkg 可能还指着上一个应用（endApp 不清它），所以要双重判断。
+    const hasRunning = currentAppPkg && runtime && runtime.activeApps
+      ? runtime.activeApps.includes(currentAppPkg)
+      : false;
+    const runningLabel = currentAppPkg
+      ? ((store.getApp(currentAppPkg) || {}).label || currentAppPkg)
+      : '';
     const menu = Menu.buildFromTemplate([
       { label: '打开 ApkStart', click: () => showWindow() },
       { type: 'separator' },
@@ -578,6 +594,21 @@ function buildTray() {
         ? apps.map((a) => ({ label: a.label, click: () => runLaunch(a.package) }))
         : [{ label: '还没有安装应用', enabled: false }]),
       { type: 'separator' },
+      {
+        label: hasRunning ? `关闭当前应用（${runningLabel}）` : '关闭当前应用',
+        enabled: !!hasRunning,
+        click: () => {
+          const pkg = currentAppPkg;
+          if (!pkg) return;
+          // 复用 app:stop 的同一条路径，不在两处写同样的逻辑
+          stopApp(pkg).then(() => refresh());
+        },
+      },
+      {
+        label: displaySettings().landscape ? '切回竖屏（需重启运行时）' : '切换横屏（需重启运行时）',
+        enabled: !!currentAppPkg,
+        click: () => { restartForOrientation(!displaySettings().landscape).catch(() => {}); },
+      },
       {
         label: displaySettings().mode === 'fullscreen' ? '切回竖屏窗口' : '全屏（自适应屏幕）',
         click: () => { toggleDisplayMode(); },
@@ -726,7 +757,7 @@ async function runLaunch(pkg) {
       onMark: mark,
       // 应用进程一出现就把画面接上去，不等后面那 4 秒的「确认不会崩」观察期。
       // 那 4 秒对稳定性有意义，但用户看到的是「点了没反应」；先让他看到应用在加载，
-      // 观感差别很大（实测点开到出画面 7.2s → 约 2s）。
+      // 观感差别很大（实测点开到出画面 7.2s → 约 3s）。
       // 这里故意不 await：接画面和存活判定并行，谁先完成都不影响另一边。
       onAppUp: () => {
         attachDoneEarly = true;
@@ -735,12 +766,34 @@ async function runLaunch(pkg) {
           .then((ok) => { earlyAttachOk = ok; mark(`early attach=${ok}`); })
           .catch(() => { earlyAttachOk = false; });
       },
+      // 启动前先把面板方向校正到设置要求的那个。
+      // 横屏只能靠物理面板（hw.lcd.width/height 互换）+ 重启实现，而这一项是在
+      // 开机时写进 config.ini 的。如果用户改了「横屏」设置、但虚拟机还以竖屏面板
+      // 跑着（预热的场景很常见），光靠 wm size / wm user-rotation 只会让画面躺倒。
+      // 所以这里发现不一致就先重启一次，reloadApp=false 让下面照常启动应用。
       beforeStart: async (rt) => {
         mark('engine ready');
+        const wantLand = !!displaySettings().landscape;
+        const cur = runtime.emulator && typeof runtime.emulator.panelLandscape === 'function'
+          ? runtime.emulator.panelLandscape()
+          : null;
+        const isBuiltin = !runtime.backend || runtime.backend.id === 'builtin';
+        if (cur !== null && cur !== wantLand && isBuiltin) {
+          mark(`orientation mismatch (panel=${cur ? 'landscape' : 'portrait'}, want=${wantLand}) 重启校正`);
+          appWin.setState({ tip: wantLand ? '正在切换到横屏…' : '正在切换到竖屏…' });
+          // restartForOrientation 重启运行时后返回新的 rt（旧 client 已失效）。
+          // 把它返回给 installer.launch，后续的 resetDisplayOverrides / startApp
+          // 都用新 client，否则全部静默失败（catch 吞掉，应用起不来画面）。
+          const newRt = await restartForOrientation(wantLand, { reloadApp: false }).catch(() => null);
+          mark('orientation fixed');
+          if (newRt && newRt.ok) return newRt;
+        }
         appWin.setState({ tip: '正在打开应用…' });
         // 沉浸式 + 关动画 + 收起锁屏：只做一次，之后每次启动都秒进
         await rt.client.prepareForeground().catch(() => {});
         mark('foreground ready');
+        // 没有重启就返回 null（installer 用原来的 rt）
+        return null;
       },
     });
     mark('app started');
@@ -841,6 +894,49 @@ function onContainerActive(on) {
   }
 }
 
+/**
+ * 关掉一个正在运行的安卓应用 —— 托盘菜单和右键菜单共用这一条路径。
+ *
+ * 做了三件事：
+ *  1. forceStop 应用进程（endApp 的停放逻辑也在这步之后）
+ *  2. 收掉画面：嵌入模式关壳窗口；独立模式先把模拟器窗口藏了再关壳
+ *     （顺序很重要：先销毁壳窗口会让模拟器窗口在桌面闪一下再被 park）
+ *  3. 清 currentAppPkg，让托盘菜单的「关闭当前应用」立刻变灰
+ *
+ * @param {string} pkg 要关闭的应用包名
+ * @param {object} [opts] { keepWindow } keepWindow=true 时不收窗口
+ * @returns {Promise<{ok:boolean, pkg?:string, error?:string}>}
+ */
+async function stopApp(pkg, opts = {}) {
+  const target = pkg || currentAppPkg;
+  if (!target) return { ok: false, error: '没有正在运行的应用' };
+  const detached = displaySettings().windowEmbed === false;
+  try {
+    await runtime.endApp(target, { onIdle: (idle) => onContainerActive(idle) }).catch(() => {});
+    appLog(`stop ${target}`);
+
+    if (!opts.keepWindow) {
+      // 独立窗口模式：先把模拟器窗口藏掉，再关壳窗口。
+      // 反过来会在桌面留下一个闪了闪又消失的模拟器窗口。
+      if (detached && appWin && appWin.isOpen) {
+        try { await appWin.agent.hide(); } catch (_) { /* ignore */ }
+      }
+      if (appWin && appWin.isOpen) {
+        appWin.close({ keepApp: true });
+      }
+    }
+
+    // 清掉当前应用标记：托盘菜单、右键菜单的「关闭应用」都据此变灰
+    if (currentAppPkg === target) currentAppPkg = null;
+
+    try { send('apps:changed'); } catch (_) { /* ignore */ }
+    return { ok: true, pkg: target };
+  } catch (e) {
+    appLog(`stop failed: ${e.message}`);
+    return { ok: false, error: e.message };
+  }
+}
+
 /** 通知桥：只在有应用窗口时轮询，关掉窗口就停，避免空转 */
 function startNotifier() {
   if (!notifier) {
@@ -936,6 +1032,15 @@ function registerIpc() {
   });
 
   ipcMain.handle('app:launch', async (_e, pkg) => runLaunch(pkg));
+
+  /**
+   * 关掉一个正在运行的安卓应用。
+   *
+   * 以前根本没有这个入口：endApp 只在「应用窗口被关闭」时触发，而独立窗口模式下
+   * 那个窗口是隐藏的、永远不会被关，所以应用一旦起来就关不掉，
+   * 用户只能退到托盘退出整个 ApkStart（连虚拟机一起没了）。
+   */
+  ipcMain.handle('app:stop', async (_e, pkg, opts = {}) => stopApp(pkg, opts));
 
   ipcMain.handle('app:uninstall', async (_e, pkg) => {
     await installer.uninstall(pkg);
@@ -1827,6 +1932,10 @@ if (!gotLock) {
       // 关窗口 = 停这个应用；最后一个窗口关掉时容器停放（降优先级、停轮询），
       // 但 Android 环境留着，下次点开是秒进而非重新冷启动。
       runtime?.endApp(pkg, { onIdle: onContainerActive }).catch(() => {});
+      // 外部关闭（Alt+F4 / 任务栏关闭）也要清当前应用标记，否则托盘菜单
+      // 还显示「关闭当前应用（xxx）」但点了没反应（应用已经停了）。
+      if (currentAppPkg === pkg) currentAppPkg = null;
+      try { send('apps:changed'); } catch (_) { /* ignore */ }
     });
 
     // 「哪些窗口才算我们的」= 运行时目录 + 随包的 engine 目录。

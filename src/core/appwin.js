@@ -73,10 +73,20 @@ class AppWindow {
   /**
    * 模拟器原生窗口自己按设备面板锁宽高比，给错比例会被夹回去。
    * 这里算出当前窗口应有的 w/h 比（含标题栏高度），用来一次给对的尺寸。
+   * 独立窗口模式下壳窗口是隐藏的、bounds 可能是竖屏默认值，
+   * 所以要按面板方向校正（横屏时宽 > 高，比值 > 1）。
    */
   _panelRatio() {
     const b = this.win ? this.win.getBounds() : this._area();
-    if (b && b.width > 0 && b.height > 0) return b.width / b.height;
+    if (b && b.width > 0 && b.height > 0) {
+      // 横屏面板下，壳窗口的 bounds 可能还是竖的（detached 模式 hide 了），
+      // 直接读会得到 0.56 (9:16)，但实际面板是 16:9。
+      // 此时用 portrait 的 h/w 作为宽（横屏 = 竖屏面板旋转 90°）
+      if (this.state.landscape && b.height > b.width) {
+        return b.height / b.width;
+      }
+      return b.width / b.height;
+    }
     return 0.5625; // 竖屏 9:16 兜底
   }
 
@@ -107,6 +117,9 @@ class AppWindow {
 
     this.pkg = pkg;
     this.portrait = portrait || { w: 540, h: 960 };
+    // 独立窗口模式下「全屏」要作用在模拟器窗口上（我们这层壳是隐藏的，
+    // maximize 一个隐藏窗口没有任何视觉效果，openDetached 会读这个标记）。
+    this._wantFullscreen = !!fullscreen;
     this.state = { label: label || '应用', tip: '正在启动安卓运行时…', ready: false, landscape: false };
 
     const area = this._area();
@@ -276,23 +289,35 @@ class AppWindow {
     this._detachedDebug += ` show=${JSON.stringify(shown)}`;
     if (!shown || shown.ok === false) { this.lastEmbedError = this._detachedDebug; return false; }
     await sleep(300);
-    // 按屏幕可用区居中、限制最大尺寸，避免它一出来就压满整个桌面。
+    // 按屏幕可用区居中和 sizing。
     // 注意：模拟器原生窗口自己按设备面板比例锁宽高比（竖屏 9:16），
     // 给一个不匹配的 w/h，它会把宽夹回高度对应的值，结果就是「设了 1280 宽
     // 却只有 400 宽」。所以这里主动按面板比例算尺寸，一次给对。
+    //
+    // 全屏（「启动时自动全屏」）时铺满整个可用区；横屏面板下宽高比本来就贴合
+    // 屏幕，铺满不会留黑边 —— 这也是横屏比竖屏更值得用全屏的原因。
     const area = this._area();
-    const maxH = Math.min(area.h - 140, 1000);
-    const maxW = Math.min(area.w - 80, 1280);
     const ratio = this._panelRatio();
-    let w = maxW;
-    let h = Math.round(w / ratio);
-    if (h > maxH) { h = maxH; w = Math.round(h * ratio); }
-    const lay = await this.agent.layout({
-      x: Math.round(area.x + (area.w - w) / 2),
-      y: Math.round(area.y + 60),
-      w,
-      h,
-    }).catch((e) => ({ ok: false, error: e.message }));
+    let w;
+    let h;
+    let x;
+    let y;
+    if (this._wantFullscreen) {
+      w = area.w;
+      h = area.h;
+      x = area.x;
+      y = area.y;
+    } else {
+      const maxH = Math.min(area.h - 140, 1000);
+      const maxW = Math.min(area.w - 80, 1280);
+      w = maxW;
+      h = Math.round(w / ratio);
+      if (h > maxH) { h = maxH; w = Math.round(h * ratio); }
+      x = Math.round(area.x + (area.w - w) / 2);
+      y = Math.round(area.y + 60);
+    }
+    const lay = await this.agent.layout({ x, y, w, h })
+      .catch((e) => ({ ok: false, error: e.message }));
     this._detachedDebug += ` layout=${JSON.stringify(lay)}`;
     this.lastEmbedError = this._detachedDebug;
     this.lastEmbedOk = false;

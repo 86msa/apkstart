@@ -603,6 +603,10 @@ async function uninstall(pkg) {
 
 const MENU_ITEMS = [
   { key: 'open', label: '打开应用', kbd: 'Enter' },
+  // 只在应用真的在运行时才出现（见 showMenu 里的过滤）。
+  // 以前完全没有这一项，独立窗口模式下又没有可点的关闭按钮，
+  // 应用一起来就关不掉，只能退到托盘退出整个 ApkStart。
+  { key: 'stop', label: '关闭应用', onlyRunning: true },
   { key: 'shortcut', label: '创建桌面快捷方式' },
   { key: 'pin', label: '固定到顶部' },
   { divider: true },
@@ -616,10 +620,11 @@ function showMenu(x, y, pkg) {
   const menu = $('ctxmenu');
   state.menuPkg = pkg;
   const app = state.apps.find((a) => a.package === pkg);
-  menu.innerHTML = MENU_ITEMS.map((it) => {
+  const items = MENU_ITEMS.filter((it) => !it.onlyRunning || (app && app.running));
+  menu.innerHTML = items.map((it) => {
     if (it.divider) return '<div class="divider"></div>';
     const label = it.key === 'pin' ? (app && app.pinned ? '取消固定' : '固定到顶部') : it.label;
-    return `<div class="item ${it.danger ? 'danger' : ''}" data-act="${it.key}">
+    return `<div class="item ${it.danger ? 'danger' : ''}" data-key="${it.key}" data-act="${it.key}">
       <span>${esc(label)}</span>${it.kbd ? `<span class="k">${it.kbd}</span>` : ''}
     </div>`;
   }).join('');
@@ -642,6 +647,19 @@ async function handleMenu(act) {
   if (!app) return;
   switch (act) {
     case 'open': return launchApp(pkg);
+    case 'stop': {
+      try {
+        const r = await api.stop(pkg);
+        if (r && r.ok) {
+          toast({ title: '已关闭', body: app.label, type: 'ok' });
+        } else {
+          toast({ title: '关闭失败', body: (r && r.error) || '未知错误', type: 'error' });
+        }
+      } catch (e) {
+        toast({ title: '关闭失败', body: e.message, type: 'error' });
+      }
+      return refreshApps();
+    }
     case 'shortcut': return createShortcut(pkg);
     case 'pin': return api.pin(pkg, !app.pinned).then(refreshApps);
     case 'reveal': return api.revealApk(pkg);
@@ -784,6 +802,8 @@ function fillSettings(s) {
   if ($('setFastDns')) $('setFastDns').checked = eng.fastDns !== false;
   if ($('setKeepSnapshot')) $('setKeepSnapshot').checked = eng.keepSnapshot !== false;
   $('setDisplayMode').value = d.mode === 'fullscreen' ? 'fullscreen' : 'window';
+  if ($('setAutoFullscreen')) $('setAutoFullscreen').value = d.autoFullscreenOnLaunch === true ? 'on' : 'off';
+  if ($('setLandscape')) $('setLandscape').value = d.landscape === true ? 'landscape' : 'portrait';
   $('setPortrait').value = d.portrait || '900x1600';
   if ($('setWindowEmbed')) $('setWindowEmbed').value = d.windowEmbed === false ? 'detached' : 'embed';
   $('portraitField').hidden = $('setDisplayMode').value === 'fullscreen';
@@ -1110,6 +1130,26 @@ function bindSettings() {
     state.settings = await api.setSettings({ display: { mode } });
     toast({ title: mode === 'fullscreen' ? '已切全屏' : '已切竖屏窗口', type: 'ok' });
   });
+  if ($('setAutoFullscreen')) {
+    $('setAutoFullscreen').addEventListener('change', async (e) => {
+      const on = e.target.value === 'on';
+      state.settings = await api.setSettings({ display: { autoFullscreenOnLaunch: on } });
+      toast({ title: on ? '已开启自动全屏' : '已关闭自动全屏', body: '下次打开应用时生效', type: 'ok' });
+    });
+  }
+  if ($('setLandscape')) {
+    $('setLandscape').addEventListener('change', async (e) => {
+      const landscape = e.target.value === 'landscape';
+      state.settings = await api.setSettings({ display: { landscape } });
+      toast({
+        title: landscape ? '已设为横屏' : '已设为竖屏',
+        body: landscape
+          ? '下次打开应用时会重启一次运行时来切换物理面板方向（约十几秒），之后就不会再重启。'
+          : '下次打开应用时会把面板切回竖屏。',
+        type: 'ok',
+      });
+    });
+  }
   $('setPortrait').addEventListener('change', async (e) => {
     state.settings = await api.setSettings({ display: { portrait: e.target.value } });
     toast({ title: '画面大小已更新', body: '下次打开应用或切换应用时生效', type: 'ok' });
@@ -1674,6 +1714,8 @@ function bindEvents() {
   });
   api.on('toast', (p) => toast({ title: p.message, type: p.type === 'error' ? 'error' : 'info' }));
   api.on('app:launched', () => setTimeout(refreshApps, 800));
+  // 应用被关掉（托盘「关闭当前应用」、右键菜单、或窗口被关）后要刷新「运行中」标记
+  api.on('apps:changed', () => setTimeout(refreshApps, 300));
   api.on('runtime:log', (m) => console.log('[runtime]', m));
   api.on('ui:navigate', (v) => {
     if (v === 'settings') openSettings();

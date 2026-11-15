@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('apkstart', {
   parseApk: (p) => invoke('apk:parse', p),
   installApk: (p) => invoke('apk:install', p),
   launch: (pkg) => invoke('app:launch', pkg),
+  stop: (pkg) => invoke('app:stop', pkg),
   uninstall: (pkg) => invoke('app:uninstall', pkg),
   createShortcut: (pkg) => invoke('app:shortcut', pkg),
   clearData: (pkg) => invoke('app:clearData', pkg),

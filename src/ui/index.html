@@ -227,6 +227,24 @@
           <span class="sub">随时按 <b>F11</b> 或右键托盘切换；全屏只放大窗口，不改变画面比例，切换不重启应用。</span>
         </div>
         <div class="field">
+          <label>自动全屏</label>
+          <select id="setAutoFullscreen">
+            <option value="off">关闭（按上面选的显示模式走）</option>
+            <option value="on">打开 · 每次启动应用都自动全屏</option>
+          </select>
+          <span class="sub">打开后，每次点开应用直接铺满屏幕，不用再按 F11。配合下面的「横屏」使用效果最好
+            —— 横屏面板的宽高比本来就贴合屏幕，全屏不会留黑边。</span>
+        </div>
+        <div class="field">
+          <label>屏幕方向</label>
+          <select id="setLandscape">
+            <option value="portrait">竖屏（手机比例，适合刷短视频、看小说）</option>
+            <option value="landscape">横屏（宽屏铺满，适合看剧、玩游戏）</option>
+          </select>
+          <span class="sub">横屏要改的是<b>虚拟手机的面板方向</b>，所以下次启动应用时会自动重启一次运行时
+            （约十几秒，只在那一次）。之后再启动都是直接用横屏面板，不再重启。</span>
+        </div>
+        <div class="field">
           <label>窗口承载方式</label>
           <select id="setWindowEmbed">
             <option value="embed">嵌入模式（默认）· 安卓画面嵌在 ApkStart 窗口里，观感统一</option>
