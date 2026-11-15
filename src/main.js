@@ -707,6 +707,10 @@ async function runUpdate() {
 async function runLaunch(pkg) {
   const t0 = Date.now();
   const mark = (s) => appLog(`launch ${pkg} ${s} +${Date.now() - t0}ms`);
+  // 「提前接画面」的状态：进程一出现就接，但最终成败要等回调回来才知道。
+  // 放在函数作用域，供后面的最终判定使用。
+  let attachDoneEarly = false;
+  let earlyAttachOk = false;
   appLog(`launch start ${pkg}`);
   try {
     // 1) 先把「应用窗口」打开显示启动动画：整个过程看不到安卓桌面，也看不到模拟器窗口
@@ -720,6 +724,17 @@ async function runLaunch(pkg) {
     const r = await installer.launch(pkg, {
       onLog: (m) => { send('runtime:log', m); appLog(`  rt ${m}`); },
       onMark: mark,
+      // 应用进程一出现就把画面接上去，不等后面那 4 秒的「确认不会崩」观察期。
+      // 那 4 秒对稳定性有意义，但用户看到的是「点了没反应」；先让他看到应用在加载，
+      // 观感差别很大（实测点开到出画面 7.2s → 约 2s）。
+      // 这里故意不 await：接画面和存活判定并行，谁先完成都不影响另一边。
+      onAppUp: () => {
+        attachDoneEarly = true;
+        mark('app up (提前接画面)');
+        attachAppWindow()
+          .then((ok) => { earlyAttachOk = ok; mark(`early attach=${ok}`); })
+          .catch(() => { earlyAttachOk = false; });
+      },
       beforeStart: async (rt) => {
         mark('engine ready');
         appWin.setState({ tip: '正在打开应用…' });
@@ -750,7 +765,15 @@ async function runLaunch(pkg) {
     }
 
     // 2) 应用真的活下来了，才把画面接到用户眼前（否则用户会看到闪一下的桌面/崩溃页）
-    const embedded = await attachAppWindow();
+    // 但如果 onAppUp 已经把画面接上了（提前接管），这里只做一次「确认」，不重复接 ——
+    // 重复接在独立窗口模式下会把刚摆好的窗口再隐藏/显示一遍，画面会闪。
+    let embedded;
+    if (attachDoneEarly) {
+      embedded = !!earlyAttachOk;
+      mark(`early attached already (${embedded})`);
+    } else {
+      embedded = await attachAppWindow();
+    }
     // 日志措辞要分清两种模式：独立窗口模式下 embedded=true 的意思是
     // 「画面已经接到用户眼前（在模拟器原生窗口里）」，而不是「嵌进我们的窗口」。
     // 否则看日志的人会以为设置没生效。

@@ -409,7 +409,7 @@ class Installer {
     return true;
   }
 
-  async launch(pkg, { onLog = () => {}, beforeStart = null, onMark = () => {} } = {}) {
+  async launch(pkg, { onLog = () => {}, beforeStart = null, onMark = () => {}, onAppUp = null } = {}) {
     const app = store.getApp(pkg);
     const rt = await this.runtime.ensure({ onLog });
     onMark('ensure done');
@@ -499,6 +499,13 @@ class Installer {
         if (!String(pid).trim()) {
           if (seen) return false; // 起来过又消失 = 真的崩了
         } else {
+          if (!seen && typeof onAppUp === 'function') {
+            // 进程刚出现就把画面接上去（不等那 4 秒观察期）。
+            // 这 4 秒是在等「确认不会马上崩」，但用户看到的是「点了没反应」；
+            // 先让他看到应用在加载，观感比藏 4 秒好得多。
+            // 回调是 fire-and-forget：它失败了也不影响后面的存活判定。
+            try { onAppUp(); } catch (_) { /* ignore */ }
+          }
           seen = true;
           if (!aliveSince) aliveSince = Date.now();
           if (Date.now() - aliveSince >= 4000) return true;

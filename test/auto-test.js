@@ -899,6 +899,33 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     }
   });
 
+  await test('点开应用要尽早出画面：进程一出现就接窗口，不等 4 秒观察期', () => {
+    const root = path.join(__dirname, '..');
+    const instJs = fs.readFileSync(path.join(root, 'src', 'core', 'installer.js'), 'utf8');
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+
+    // 实机测出来的：进程在 2 秒时就出现了，但我们为了「确认不会马上崩」又等了 4 秒
+    // 才把窗口接上去，用户看到的就是「点了没反应」。改成进程一出现就接。
+    assert(/onAppUp/.test(instJs), 'installer.launch 需要 onAppUp 回调');
+    assert(/if \(!seen && typeof onAppUp === 'function'\)/.test(instJs),
+      'onAppUp 必须在「第一次看到进程」时触发，且只触发一次');
+
+    // 主进程要接这个回调，并且是并行接（不 await），否则又变成串行等待
+    assert(/onAppUp:\s*\(\)\s*=>/.test(mainJs), 'main.js 要传 onAppUp');
+    const block = mainJs.slice(mainJs.indexOf('onAppUp: () =>'), mainJs.indexOf('beforeStart:'));
+    assert(/attachAppWindow\(\)/.test(block), 'onAppUp 里要立刻接画面');
+    assert(!/await attachAppWindow\(\)/.test(block),
+      'onAppUp 里不能 await 接画面（会和存活判定串行，等于没优化）');
+
+    // 提前接过了就不能再在后面重复接一次 —— 独立窗口模式下会把刚摆好的窗口
+    // 再隐藏/显示一遍，画面会闪。
+    assert(/attachDoneEarly/.test(mainJs), '要记住是否已经提前接过画面');
+    assert(/if \(attachDoneEarly\)/.test(mainJs), '最终判定要跳过重复接画面');
+
+    // 存活观察期本身不能删：它是防「闪一下就崩」的兜底
+    assert(/aliveSince >= 4000/.test(instJs), '4 秒存活观察期要保留（防闪崩）');
+  });
+
   await test('FydeOS 底座：Windows 也能用，但不嵌窗口、不假装能开机', async () => {
     const { FydeosBackend, splitHost, detectVmHost } = require('../src/core/backends/fydeos');
     const b = new FydeosBackend(path.join(__dirname, '..'), {});
