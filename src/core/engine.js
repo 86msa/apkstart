@@ -63,6 +63,9 @@ class Runtime {
     this._client = null;
     this._bootLog = [];
     this._activeApps = new Set();  // 容器会话：当前打开的应用窗口
+    // 最近一次网络体检结果。状态栏要显示「网络正常/未联网」，但状态是高频轮询的，
+    // 不能每次都去 guest 里跑一遍 shell；这里只缓存结论，过期（>5 分钟）就不采信。
+    this._lastNetwork = null;
     this.emuSerial = EMU_SERIAL;   // 端口是动态挑的，serial 跟着变
     /**
      * 后端适配层：把「安卓从哪来」从本类里抽出去。
@@ -149,6 +152,35 @@ class Runtime {
 
   // ---------------- 状态 ----------------
 
+  /**
+   * 给状态栏用的网络快照（最近一次体检结论）。
+   * 超过 5 分钟就不采信：中间可能断过网，宁可显示「未知」也不要骗用户说还行。
+   */
+  _networkSnapshot() {
+    const n = this._lastNetwork;
+    if (!n) return null;
+    if (Date.now() - n.at > 5 * 60 * 1000) return null;
+    return { ok: n.ok, ip: n.ip, reason: n.reason };
+  }
+
+  /**
+   * 后台补一次网络体检（不阻塞 status 返回）。
+   * 状态栏要显示网络状态，但 status() 是高频轮询的，不能每次都去 guest 里跑 shell。
+   * 所以第一次（或过期后）在后台跑一遍，结论缓存进 _lastNetwork，下一次轮询就能显示。
+   */
+  _probeNetworkInBackground() {
+    if (this._netProbing) return;
+    const n = this._lastNetwork;
+    if (n && Date.now() - n.at < 60000) return;  // 一分钟内刚查过，别重复
+    this._netProbing = true;
+    this.emulator.checkNetwork(this.adbPath())
+      .then((r) => {
+        this._lastNetwork = { ok: !!(r && r.ok), ip: (r && r.ip) || '', reason: (r && r.reason) || '', at: Date.now() };
+      })
+      .catch(() => { /* 查不到就保持原样，下一轮再试 */ })
+      .finally(() => { this._netProbing = false; });
+  }
+
   async status() {
     const backend = this.backend;
     // 第三方底座（MuMu 等）不走自带镜像那套「缺 adb / 缺 emulator / 缺系统镜像」的判定，
@@ -178,6 +210,7 @@ class Runtime {
         needsSetup: check.ok ? null : (check.needs || 'backend'),
         error: check.ok ? '' : (check.reason || ''),
         serial: backend.serial || '',
+        network: this._networkSnapshot(),
         autoProfile: '',
         diagnosis: null,
         attempts: [],
@@ -198,6 +231,9 @@ class Runtime {
           result.android = android;
           result.sdk = sdk;
           result.freeform = String(ff).trim() === '1' || this._freeformReady;
+          // 设备在线但还没查过网络：后台补一次，下次轮询状态栏就有网络指示了。
+          // 注意这里不能 await——它要跑好几条 shell，会把状态轮询拖慢。
+          this._probeNetworkInBackground();
         }
       } catch (e) {
         result.error = e.message;
@@ -238,6 +274,7 @@ class Runtime {
       needsSetup: null,
       error: '',
       serial: this.emuSerial,
+      network: this._networkSnapshot(),
       autoProfile: this.emulator.profile ? doctor.describeProfile(this.emulator.profile) : '',
       diagnosis: this.emulator.lastDiagnosis || null,
       attempts: this.emulator.attempts || [],
@@ -262,6 +299,7 @@ class Runtime {
         result.android = android;
         result.sdk = sdk;
         result.freeform = String(ff).trim() === '1' || this._freeformReady;
+        this._probeNetworkInBackground();
       }
     } catch (e) {
       result.error = e.message;
@@ -469,6 +507,19 @@ class Runtime {
 
   /** 供安装器等外部调用：装完应用后重新存一份快照，下次开机仍是秒进 */
   scheduleSnapshotSave(delay = 12000) { this._armSnapshotSave(delay); }
+
+  /**
+   * 强制存一份快照，**不等空闲**。
+   *
+   * 什么时候需要：刚修好网络、马上就要启动应用的时候。正常的
+   * scheduleSnapshotSave 只在没有应用窗口时才写盘，而应用一起来就永远不空闲，
+   * 于是「网络已连上」这个状态从来没被存下来 —— 下次开机又从旧快照恢复成
+   * 断网状态，每次都要重连一遍。这里显式绕过空闲判断，一次写盘换之后次次省。
+   */
+  forceSnapshotSave(delay = 3000) {
+    if (!this.emulator.running()) return;
+    this.emulator.scheduleSnapshotSave(this.adbPath(), { delay, isIdle: () => true });
+  }
 
   /**
    * 预热：在用户点开应用之前，先把安卓环境在后台引导好。
@@ -1272,16 +1323,6 @@ class Runtime {
   }
 
   /**
-   * 等待虚拟机联网。
-   *
-   * 实测：`sys.boot_completed` 只代表系统起来了，Wi-Fi 关联 + DHCP 还要再等
-   * 十几秒到一分多钟才会拿到 10.0.2.16。红果这类应用一进去就拉首页数据，
-   * 没网时页面渲染成一整块黑底（隐私弹窗是本地页面所以正常显示），
-   * 用户看到的就是「点同意并继续之后一直黑屏」。所以拉起应用前先等网络就绪。
-   *
-   * @returns {Promise<{ok:boolean,reason:string,ip?:string,gateway?:string}>}
-   */
-  /**
    * 把「已保存但不会自动连」的 AndroidWifi 连上（非破坏性，不重启、不清数据）。
    * 具体实现与实机原因见 emulator.repairWifi。
    *
@@ -1293,33 +1334,60 @@ class Runtime {
     return this.emulator.repairWifi(adb).catch(() => false);
   }
 
+  /**
+   * 等待虚拟机联网。
+   *
+   * 实测：`sys.boot_completed` 只代表系统起来了，Wi-Fi 关联 + DHCP 还要再等
+   * 十几秒到一分多钟才会拿到 10.0.2.16。红果这类应用一进去就拉首页数据，
+   * 没网时页面渲染成一整块黑底（隐私弹窗是本地页面所以正常显示），
+   * 用户看到的就是「点同意并继续之后一直黑屏」。所以拉起应用前先等网络就绪。
+   *
+   * @returns {Promise<{ok:boolean,reason:string,ip?:string,gateway?:string}>}
+   */
   async waitForNetwork({ timeoutMs = 90000, onLog = () => {}, adbPath = '' } = {}) {
+    const done = (r) => {
+      this._lastNetwork = { ok: !!(r && r.ok), ip: (r && r.ip) || '', reason: (r && r.reason) || '', at: Date.now() };
+      return r;
+    };
     // 第三方底座（MuMu 等）的网络是它自己桥接好的，没有 netsimd 那一套；
     // 只要 adb 在线并且能解析 DNS 就认为网络可用，不做耗时的 ping 循环。
     if (this.backend.id !== 'builtin') {
       const online = await this.client().isOnline().catch(() => false);
-      if (!online) return { ok: false, reason: 'device-offline' };
+      if (!online) return done({ ok: false, reason: 'device-offline' });
       const r = await this.client()
         .shell('ping -c 1 -W 2 223.5.5.5 >/dev/null 2>&1 && echo OK || echo FAIL', { timeout: 8000 })
         .catch(() => 'FAIL');
-      return { ok: String(r).includes('OK'), reason: String(r).includes('OK') ? '' : 'no-route' };
+      return done({ ok: String(r).includes('OK'), reason: String(r).includes('OK') ? '' : 'no-route' });
     }
     const t0 = Date.now();
     let last = null;
     let lastNotice = 0;
     let offlineSince = 0;
+    let notConnectedStreak = 0;
     while (Date.now() - t0 < timeoutMs) {
       const online = await this.client().isOnline().catch(() => false);
       if (!online) {
         // 刚重启的虚拟机会有一段时间连 adb 都还没上线，不能一看到 offline 就放弃
         // （之前就是这样：重置数据后立刻返回 device-offline，判定「修复失败」）。
         if (!offlineSince) offlineSince = Date.now();
-        if (Date.now() - offlineSince > 45000) return { ok: false, reason: 'device-offline' };
+        if (Date.now() - offlineSince > 45000) return done({ ok: false, reason: 'device-offline' });
       } else {
         offlineSince = 0;
         // eslint-disable-next-line no-await-in-loop
         last = await this.emulator.checkNetwork(adbPath || this.adbPath()).catch(() => null);
-        if (last && last.ok) return last;
+        if (last && last.ok) return done(last);
+        // `wifi-not-connected` 是「Wi-Fi 压根没关联上」，不是「关联了还在等 DHCP」。
+        // 这种状态下死等超时纯属浪费：本轮开机它不会自己连上（实机上 AndroidWifi
+        // 常落成「已保存但不会自动连接」）。连续几次都是这个原因就提前收工，
+        // 让调用方赶紧去做真正有效的重连，别把 20 秒耗在原地。
+        // 取 3 次（≈9 秒）而不是 2 次：刚开机时 Wi-Fi 本来就要几秒关联，
+        // 判太早会去点设置页，反而打断它自己连上的过程。
+        if (last && last.reason === 'wifi-not-connected') {
+          notConnectedStreak += 1;
+          if (notConnectedStreak >= 3) return done(last);
+        } else {
+          notConnectedStreak = 0;
+        }
       }
       if (Date.now() - lastNotice > 10000) {
         lastNotice = Date.now();
@@ -1328,7 +1396,7 @@ class Runtime {
       // eslint-disable-next-line no-await-in-loop
       await new Promise((r) => setTimeout(r, 3000));
     }
-    return last || { ok: false, reason: 'timeout' };
+    return done(last || { ok: false, reason: 'timeout' });
   }
 
   /**

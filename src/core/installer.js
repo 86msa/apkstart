@@ -444,7 +444,13 @@ class Installer {
           const fixed = await this.runtime.repairWifi().catch(() => false);
           if (fixed) {
             net = await this.runtime.waitForNetwork({ onLog, timeoutMs: 15000 }).catch(() => null);
-            if (net && net.ok) onLog(`虚拟机网络已恢复（${net.ip || ''}）`);
+            if (net && net.ok) {
+              onLog(`虚拟机网络已恢复（${net.ip || ''}）`);
+              // 关键：把「网络已连上」这个状态立刻存进快照。
+              // 不存的话下次开机还是从「没网」的旧快照恢复，每次都要再花十几秒重连。
+              // 用 forceSnapshotSave 是因为马上要启动应用，永远等不到「空闲」。
+              try { this.runtime.forceSnapshotSave?.(3000); } catch (_) { /* 存不下不影响启动 */ }
+            }
           }
         } catch (e) {
           // 不要把异常吞得无声无息：这条日志就是「重连到底跑没跑」的唯一证据。

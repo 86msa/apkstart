@@ -140,6 +140,9 @@ function renderGrid() {
     return;
   }
 
+  // 末尾放一块「添加应用」虚线卡片。
+  // 目的不只是好看：应用少的时候下面是一大片空白，用户不知道该干什么；
+  // 这块卡片把「还能拖 APK 进来」这件事直接摆在眼前，也顺手填掉了空白。
   grid.innerHTML = apps.map((a) => `
     <div class="card" data-pkg="${esc(a.package)}" title="${esc(a.label)} · ${esc(a.package)}">
       ${a.pinned ? '<span class="pin">★</span>' : ''}
@@ -153,7 +156,16 @@ function renderGrid() {
       <div class="meta">${a.running ? '运行中' : `v${esc(a.versionName)}${a.lastLaunchAt ? ' · ' + relTime(a.lastLaunchAt) : ''}`}</div>
       <div class="open-hint">${a.running ? '切换到前台' : '打开'}</div>
     </div>
-  `).join('');
+  `).join('') + `
+    <div class="card card-add" id="cardAdd" role="button" tabindex="0" title="拖入 APK 文件，或点击选择">
+      <div class="add-plus" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round"><path d="M12 6v12"/><path d="M6 12h12"/></svg>
+      </div>
+      <div class="name">添加应用</div>
+      <div class="meta">拖入 APK 即可安装</div>
+    </div>
+  `;
 }
 
 /* ---------------- 数据刷新 ---------------- */
@@ -230,6 +242,22 @@ async function refreshStatus() {
       tag.className = 'brand-tag';
     }
     $('statusDevice').textContent = s.deviceOnline ? (s.serial || '') : '';
+    // 网络状态：这是用户最容易踩的坑（应用里一直「网络错误」，但看不出是虚拟机没网）。
+    // 直接摆在状态栏，出问题时一眼能看到，不用去翻日志。
+    const netEl = $('statusNet');
+    const netSep = $('statusNetSep');
+    if (netEl) {
+      const show = !!s.deviceOnline && !!s.network;
+      netEl.hidden = !show;
+      if (netSep) netSep.hidden = !show;
+      if (show) {
+        netEl.textContent = s.network.ok ? `网络正常 ${s.network.ip || ''}`.trim() : '虚拟机未联网';
+        netEl.className = 'status-item status-net ' + (s.network.ok ? 'ok' : 'warn');
+        netEl.title = s.network.ok
+          ? '安卓虚拟机已联网，联网类应用可以正常加载'
+          : '安卓虚拟机没有网络，联网页面会一直是空白/报错。可在「设置 → 修复网络」处理';
+      }
+    }
 
     renderSetup(s);
   } catch (e) {
@@ -1564,7 +1592,11 @@ function bindEvents() {
 
   $('grid').addEventListener('click', (e) => {
     const card = e.target.closest('.card');
-    if (card) launchApp(card.dataset.pkg);
+    if (!card) return;
+    // 「添加应用」卡片没有 data-pkg，走安装流程而不是启动。
+    // 直接转调工具栏那个「安装 APK」按钮，复用它的文件选择逻辑。
+    if (card.classList.contains('card-add')) { $('btnInstall').click(); return; }
+    if (card.dataset.pkg) launchApp(card.dataset.pkg);
   });
 
   $('grid').addEventListener('contextmenu', (e) => {
