@@ -816,6 +816,49 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(/setLiteMode/.test(uiHtml) && /setDeepTrim/.test(uiHtml), '设置页需暴露轻量容器选项');
   });
 
+  await test('独立窗口模式：不 SetParent、按面板比例给尺寸、清理不藏用户窗口', () => {
+    const root = path.join(__dirname, '..');
+    const agentPs1 = fs.readFileSync(path.join(root, 'src', 'core', 'win', 'agent.ps1'), 'utf8');
+    const appwinJs = fs.readFileSync(path.join(root, 'src', 'core', 'appwin.js'), 'utf8');
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    const uiHtml = fs.readFileSync(path.join(root, 'src', 'ui', 'index.html'), 'utf8');
+
+    // 开关一路通到底：UI -> main -> appwin
+    assert(/setWindowEmbed/.test(uiHtml), '设置页需要「窗口承载方式」开关');
+    assert(/windowEmbed === false/.test(mainJs), 'main 必须能识别独立窗口模式');
+    assert(/openDetached/.test(appwinJs), 'appwin 需要 openDetached');
+    assert(/detached:\s*displaySettings\(\)\.windowEmbed === false/.test(mainJs), '开窗口时要带上 detached');
+
+    // 独立模式绝不能 SetParent——那正是嵌入问题的根源
+    // （只看真正的代码行，注释里提到 SetParent 是在解释为什么不用它）
+    const codeOnly = (src) => src.split('\n')
+      .map((l) => l.replace(/\/\/.*$/, ''))
+      .filter((l) => l.trim() && !/^\s*(\*|\/\*)/.test(l))
+      .join('\n');
+    const layoutBlock = agentPs1.slice(agentPs1.indexOf('cmd == "layout"'));
+    const layoutBody = codeOnly(layoutBlock.slice(0, layoutBlock.indexOf('cmd == "hook"')));
+    assert(!/SetParent\s*\(/.test(layoutBody), 'layout 不能 SetParent（独立模式就是要绕开它）');
+    assert(/SetWindowPos\s*\(/.test(layoutBody), 'layout 应该只把窗口摆到目标矩形');
+
+    // 清理逻辑在独立模式下必须收手，否则会把用户正在看的窗口当杂物藏掉
+    assert(/_detachedMode/.test(agentPs1), 'agent.ps1 需要 _detachedMode 标记');
+    const detachBlock = agentPs1.slice(agentPs1.indexOf('cmd == "detach"'));
+    assert(/keep/.test(detachBlock.slice(0, 600)), 'detach 需要 keep 参数区分「切独立」和「结束嵌入」');
+
+    // 尺寸要按面板比例算：模拟器自己锁宽高比，给错比例会被夹回去
+    assert(/_panelRatio/.test(appwinJs), '独立窗口尺寸必须按面板比例计算');
+    assert(!/w:\s*Math\.min\(area\.w - 80, 1280\)/.test(appwinJs), '不能再写死 1280 宽（会被模拟器夹成竖条）');
+  });
+
+  await test('后端自动选择：builtin 永远优先，不能被装过的第三方模拟器顶掉', () => {
+    const backends = require('../src/core/backends');
+    // 用户装了 MuMu 不代表要用它：auto 模式下必须是我们自己的运行时。
+    // 之前 mumu 排第一，导致启动后根本没开自己的模拟器、嵌入全失败。
+    const order = backends.AUTO_ORDER;
+    assert(Array.isArray(order), 'AUTO_ORDER 应该是个数组');
+    assert(order[0] === 'builtin', `auto 模式必须优先 builtin，实际第一是 ${order[0]}`);
+  });
+
   await test('WinAgent.setHook(false) 在默认状态下不会拉起 PowerShell 代理', async () => {
     const { WinAgent } = require('../src/core/agent');
     const a = new WinAgent();
