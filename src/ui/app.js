@@ -699,8 +699,25 @@ function bindAndroid() {
   $('btnAndroidApps').addEventListener('click', () => open('apps'));
 }
 
+/** 按当前底座的 id 决定哪些字段要露出来（自带 = 镜像/内存那些，第三方 = 它自己的路径） */
+function syncBackendFields() {
+  const mode = $('setEngineMode') ? $('setEngineMode').value : 'builtin';
+  const builtin = mode === 'builtin' || mode === 'attach';
+  const show = (id, on) => { const el = $(id); if (el && el.closest('.field')) el.closest('.field').hidden = !on; };
+  show('setMumuPath', mode === 'mumu');
+  show('setSystemImage', builtin);
+  show('setMemory', builtin);
+  show('setCores', builtin);
+  show('setCompat', builtin);
+  show('compatInstallField', builtin && !$('compatInstallField').hidden);
+  show('setIdle', true);
+  show('setDevice', mode === 'attach');
+}
+
 function fillSettings(s) {
   $('setEngineMode').value = s.engine.mode;
+  if ($('setMumuPath')) $('setMumuPath').value = s.engine.mumuPath || '';
+  syncBackendFields();
   $('setAdbPath').value = s.adbPath || '';
   $('setDevice').value = s.device || '';
   $('setSystemImage').value = s.runtime.isoPath || '';
@@ -738,6 +755,7 @@ function fillSettings(s) {
   if ($('setKeepSnapshot')) $('setKeepSnapshot').checked = eng.keepSnapshot !== false;
   $('setDisplayMode').value = d.mode === 'fullscreen' ? 'fullscreen' : 'window';
   $('setPortrait').value = d.portrait || '900x1600';
+  if ($('setWindowEmbed')) $('setWindowEmbed').value = d.windowEmbed === false ? 'detached' : 'embed';
   $('portraitField').hidden = $('setDisplayMode').value === 'fullscreen';
 }
 
@@ -926,7 +944,14 @@ function bindSettings() {
     state.settings = await api.setSettings(patch);
   };
 
-  $('setEngineMode').addEventListener('change', (e) => save({ engine: { mode: e.target.value } }));
+  $('setEngineMode').addEventListener('change', async (e) => {
+    await save({ engine: { mode: e.target.value } });
+    syncBackendFields();
+    refreshStatus();
+  });
+  if ($('setMumuPath')) {
+    $('setMumuPath').addEventListener('change', (e) => save({ engine: { mumuPath: e.target.value.trim() } }));
+  }
   $('setAdbPath').addEventListener('change', (e) => save({ adbPath: e.target.value.trim() }));
   $('setDevice').addEventListener('change', async (e) => {
     await save({ device: e.target.value.trim() });
@@ -1055,6 +1080,15 @@ function bindSettings() {
   $('setPortrait').addEventListener('change', async (e) => {
     state.settings = await api.setSettings({ display: { portrait: e.target.value } });
     toast({ title: '画面大小已更新', body: '下次打开应用或切换应用时生效', type: 'ok' });
+  });
+  $('setWindowEmbed').addEventListener('change', async (e) => {
+    const embed = e.target.value === 'embed';
+    state.settings = await api.setSettings({ display: { windowEmbed: embed } });
+    toast({
+      title: embed ? '已切回嵌入模式' : '已切到独立窗口模式',
+      body: '下次打开应用时生效。独立模式下安卓画面由模拟器自己开窗口，方向与缩放都由它处理。',
+      type: 'ok',
+    });
   });
   $('btnRebuildShortcuts').addEventListener('click', async () => {
     const r = await api.rebuildShortcuts();

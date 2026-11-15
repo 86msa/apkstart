@@ -17,7 +17,9 @@ const DEFAULT_SETTINGS = {
   adbPath: '',
   device: '127.0.0.1:5555',
   engine: {
-    mode: 'builtin',         // builtin（自带运行时，默认） | attach（连接已有运行时，高级）
+    mode: 'builtin',         // builtin（自带运行时，默认） | mumu（复用已装的 MuMu 模拟器） | attach（连接已有运行时，高级）
+    mumuPath: '',            // MuMu 安装目录（留空 = 自动按注册表 / 常见路径查找）
+    mumuIndex: 0,            // MuMu 多开实例索引，默认 0 号
     qemuPath: '',
     systemImage: '',
     memoryMB: 0,             // 0 = 由 doctor 按机器内存自动决定
@@ -120,6 +122,9 @@ const DEFAULT_SETTINGS = {
     // 横屏 = 把 AVD 物理面板换成 1280x720 并重启（唯一能得到正立+铺满的方式）。
     // 持久化在这里，重启 ApkStart 后仍按这个方向开机。
     landscape: false,
+    // 窗口模式：true=把安卓画面嵌进 ApkStart 自己的窗口（观感统一）；
+    // false=让模拟器开自己的原生窗口（绕开嵌入固有的黑边/坐标错位/铺不满问题）。
+    windowEmbed: true,
   },
 };
 

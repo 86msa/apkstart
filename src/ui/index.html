@@ -224,6 +224,16 @@
           </select>
           <span class="sub">随时按 <b>F11</b> 或右键托盘切换；全屏只放大窗口，不改变画面比例，切换不重启应用。</span>
         </div>
+        <div class="field">
+          <label>窗口承载方式</label>
+          <select id="setWindowEmbed">
+            <option value="embed">嵌入模式（默认）· 安卓画面嵌在 ApkStart 窗口里，观感统一</option>
+            <option value="detached">独立窗口 · 由模拟器自己开窗口，避开花屏/黑边/点不准</option>
+          </select>
+          <span class="sub">嵌入模式最像「一个应用一个窗口」，但需要把模拟器的窗口塞进我们自己的窗口，
+            容易在缩放、旋转、多窗口切换时出现黑边或点击错位。独立模式下方向、缩放、输入都由模拟器原生处理，
+            这类问题不会出现，代价是多一个任务栏图标。改动在下次打开应用时生效。</span>
+        </div>
         <div class="field" id="portraitField">
           <label>竖屏画面大小</label>
           <select id="setPortrait">
@@ -421,8 +431,16 @@
           <label>引擎模式</label>
           <select id="setEngineMode">
             <option value="builtin">自带运行时（推荐，QEMU + Android-x86，无第三方依赖）</option>
+            <option value="mumu">MuMu 模拟器 12（复用本机已装的网易模拟器）</option>
             <option value="attach">连接已有运行时（高级：复用 WSA / 其他模拟器的 adb 端口）</option>
           </select>
+          <span class="sub">「自带运行时」会自己下载安卓镜像；选第三方模拟器时不下载任何东西，
+            直接驱动你电脑上已经装好的那台，装的应用和它自己的应用共用一套环境。</span>
+        </div>
+        <div class="field" id="mumuPathField" hidden>
+          <label>MuMu 安装目录（留空自动查找）</label>
+          <input id="setMumuPath" type="text" placeholder="例如 D:\MuMu Player 12" />
+          <span class="sub">默认会按注册表和常见路径自动找 MuMuManager.exe；装在非常规盘符时在这里指定。</span>
         </div>
         <div class="field">
           <label>adb 路径</label>

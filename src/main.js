@@ -326,17 +326,34 @@ async function restartForOrientation(landscape) {
       }
     }
     await new Promise((r) => setTimeout(r, 1500));
-    const embedded = await appWin.embed().catch(() => false);
-    if (!embedded) {
-      setTimeout(() => { if (appWin.isOpen) appWin.embed().catch(() => {}); }, 1500);
-      setTimeout(() => { if (appWin.isOpen) appWin.embed().catch(() => {}); }, 4000);
-    }
+    const embedded = await attachAppWindow();
     appWin.scheduleFit(6);
     return true;
   } catch (e) {
     appLog(`rotate restart failed: ${e && e.message}`);
     return false;
   }
+}
+
+/**
+ * 把安卓画面接到用户眼前。两种模式：
+ *   - 嵌入（默认）：SetParent 进我们自己的窗口，观感统一；
+ *   - 独立窗口：让模拟器开原生窗口，绕开嵌入固有的一整串问题
+ *     （黑边、坐标错位、铺不满、Qt 面板方向打架）。由设置 display.windowEmbed 控制。
+ */
+async function attachAppWindow() {
+  if (!appWin || !appWin.isOpen) return false;
+  const embedMode = displaySettings().windowEmbed !== false;
+  if (!embedMode) {
+    // 独立窗口不需要标题栏里那块区域了，直接让模拟器窗口自己露出来
+    return appWin.openDetached().catch(() => false);
+  }
+  const ok = await appWin.embed().catch(() => false);
+  if (!ok) {
+    setTimeout(() => { if (appWin.isOpen) appWin.embed().catch(() => {}); }, 1500);
+    setTimeout(() => { if (appWin.isOpen) appWin.embed().catch(() => {}); }, 4000);
+  }
+  return ok;
 }
 
 /** 打开（或复用）那个「一个应用一个干净窗口」 */
@@ -351,6 +368,7 @@ function openAppWindow(pkg, tip) {
     // 横屏时窗口按横比例开，否则竖窗口里塞横画面会留出大片黑边
     portrait: land ? { w: p0.h, h: p0.w } : p0,
     fullscreen: displaySettings().mode === 'fullscreen',
+    detached: displaySettings().windowEmbed === false,
   });
   appWin.setIcon(rec && rec.icoPath);
   // 打开时按已保存的方向初始化（物理面板方向在 doctor.lcdFor 里决定）
@@ -703,14 +721,37 @@ async function runLaunch(pkg) {
     });
     mark('app started');
 
-    // 2) 应用真的活下来了，才把画面嵌进窗口（否则用户会看到闪一下的桌面/崩溃页）
-    const embedded = await appWin.embed();
-    if (!embedded) appLog(`embed failed: ${appWin.lastEmbedError || 'unknown'}`);
-    mark(`embedded=${embedded}`);
+    // 1.5) 第三方底座的就绪门禁：等画面窗口真正出现在桌面上再嵌。
+    //      自带的 emulator 窗口是自己创建的，嵌完由代理负责显示；
+    //      而 MuMu 这类窗口不是我们创建的 —— 在它还隐藏时 SetParent，
+    //      Windows 会隐式清掉 WS_VISIBLE，之后它永远不会自己再显示（宿主里全黑）。
+    const backend = runtime.backend;
+    if (backend && backend.id !== 'builtin' && typeof backend.windowReady === 'function') {
+      const ready = await backend.windowReady({
+        isEmbedded: () => !!(appWin && appWin.lastEmbedOk),
+      }).catch((e) => ({ ok: false, reason: e.message }));
+      mark(`windowReady=${ready && ready.ok}${ready && ready.reason ? `(${ready.reason})` : ''}`);
+      if (!ready || !ready.ok) {
+        // 拿不到窗口也别把应用窗口晾着：给用户一句能看懂的话
+        appWin.setState({ tip: `等待 ${backend.label} 的画面窗口…` });
+        await new Promise((r) => setTimeout(r, 1200));
+      }
+    }
+
+    // 2) 应用真的活下来了，才把画面接到用户眼前（否则用户会看到闪一下的桌面/崩溃页）
+    const embedded = await attachAppWindow();
+    // 日志措辞要分清两种模式：独立窗口模式下 embedded=true 的意思是
+    // 「画面已经接到用户眼前（在模拟器原生窗口里）」，而不是「嵌进我们的窗口」。
+    // 否则看日志的人会以为设置没生效。
+    const attachMode = displaySettings().windowEmbed === false ? 'detached' : 'embed';
+    if (!embedded) appLog(`attach failed (${attachMode}): ${appWin.lastEmbedError || 'unknown'}`);
+    mark(`${attachMode}=${embedded}`);
     // 嵌入完成后把窗口从别的窗口底下抬出来。否则上层窗口（浏览器等）会盖住安卓画面，
     // 用户看到的是「黑屏 / 画面没填满」，鼠标也点不到应用（全被上层窗口吃掉）。
     // 短暂 topmost 再立刻撤销，只借用一次置顶把 Z 序抬到最前，不会长期霸占顶层。
-    if (appWin.isOpen) {
+    // 独立窗口模式跳过：那时画面在模拟器自己的窗口里，把空壳窗口显示出来只会挡住它。
+    const detachedMode = displaySettings().windowEmbed === false;
+    if (appWin.isOpen && !detachedMode) {
       try {
         appWin.win.show();
         appWin.win.setAlwaysOnTop(true);
@@ -724,12 +765,6 @@ async function runLaunch(pkg) {
       } catch (_) { /* 窗口可能刚关闭 */ }
     }
     appWin.setState({ ready: true, tip: '' });
-    // 嵌入失败（模拟器窗口还没建好）时再补两次：用户看到的是黑窗口，
-    // 后台补上就恢复正常，不用让用户手动重开。
-    if (!embedded) {
-      setTimeout(() => { if (appWin.isOpen) appWin.embed().catch(() => {}); }, 1500);
-      setTimeout(() => { if (appWin.isOpen) appWin.embed().catch(() => {}); }, 4000);
-    }
     // 容器会话：环境已经就绪，这里只做「按应用裁剪 + 打开后台轮询」，
     // 不再为这个 App 重新引导一遍 Android。鼠标键位钩子由窗口 focus 事件
     // 按设置决定，失焦即卸载。
@@ -742,7 +777,7 @@ async function runLaunch(pkg) {
       winAgent.setPerformanceMode(game).catch(() => {});
     }
     send('app:launched', { package: pkg, engine: r.engine });
-    appLog(`launch ok ${pkg} embedded=${embedded}`);
+    appLog(`launch ok ${pkg} ${attachMode}=${embedded}`);
     return { ok: true, embedded };
   } catch (e) {
     appLog(`launch failed ${pkg}: ${e && (e.stack || e.message)}`);
@@ -934,7 +969,34 @@ function registerIpc() {
         runtime?.provisioner?.invalidateEnvCache?.();
       } catch (_) { /* ignore */ }
     }
+    // 换了底座：旧后端的连接 / 端口假设全部作废，正在跑的应用窗口也要收起。
+    // 不处置的话，新底座会用上一个后端的 serial 去 adb，表现成「点开应用没反应」。
+    if (patch && patch.engine && ('mode' in patch.engine || 'mumuPath' in patch.engine || 'mumuIndex' in patch.engine)) {
+      try {
+        if (appWin && appWin.isOpen) appWin.close({ keepApp: false });
+        runtime?.resetBackend?.();
+        deviceSize.value = null;
+        send('runtime:log', `已切换运行时底座：${runtime.backend.label}`);
+      } catch (_) { /* ignore */ }
+    }
     return next;
+  });
+
+  /** 底座清单 + 本机探测结果（设置页「引擎模式」用） */
+  ipcMain.handle('backend:list', async () => {
+    const backends = require('./core/backends');
+    const out = [];
+    for (const d of backends.describe()) {
+      let probe = { ok: false, found: false };
+      try {
+        const Cls = backends.byId(d.id);
+        const inst = new Cls(APP_ROOT, { runtime, store, log: (l) => appLog(`  backend ${l}`) });
+        // eslint-disable-next-line no-await-in-loop
+        probe = await inst.probe();
+      } catch (e) { probe = { ok: false, found: false, detail: e.message }; }
+      out.push({ ...d, found: !!probe.found, path: probe.path || '', detail: probe.detail || '' });
+    }
+    return { current: runtime.backendId, list: out };
   });
 
   /**
@@ -1714,6 +1776,15 @@ if (!gotLock) {
       },
       // 传 getter：设置页改了键位，下一次窗口 focus / 刷新就生效，不用重启
       pointerConfig: () => pointer.pointerOptions(store.getSettings()),
+      // 底座决定「画面窗口从哪来」：自带底座返回 null（窗口代理自己按进程作用域找），
+      // MuMu 这类第三方底座每次都现取句柄（句柄会在设备进程重启后失效）。
+      windowTargets: () => {
+        try {
+          const b = runtime.backend;
+          if (!b || b.id === 'builtin') return null;
+          return b.windowTargets();
+        } catch (_) { return null; }
+      },
     });
     appWin.onCloseApp((pkg) => {
       // 关窗口 = 停这个应用；最后一个窗口关掉时容器停放（降优先级、停轮询），
@@ -1724,10 +1795,17 @@ if (!gotLock) {
     // 「哪些窗口才算我们的」= 运行时目录 + 随包的 engine 目录。
     // 窗口代理只允许碰这些进程创建的窗口 —— 别的 Qt 应用（微信 4.x 就是 Qt6，
     // 窗口类名和模拟器一模一样）一个都不许动，见 agent.ps1 的 SetScope。
+    // 第三方底座（MuMu 等）：把它的安装目录也加进来，这样开机阶段那个设备窗口
+    // 会被一起压住（只压 Qt 弹窗体/Chrome 工具条这类安全类名，见 HideStrayWindows）；
+    // 它的画面窗口嵌进宿主后不受影响。
     const agentScope = () => {
       const dirs = [];
       try { dirs.push(runtime.provisioner.root); } catch (_) { /* ignore */ }
       try { dirs.push(path.join(APP_ROOT, 'engine')); } catch (_) { /* ignore */ }
+      try {
+        const b = runtime.backend;
+        if (b && b.id !== 'builtin' && b.root) dirs.push(b.root);
+      } catch (_) { /* ignore */ }
       return dirs.filter(Boolean);
     };
     // 范围存在代理进程的内存里，代理一重建就没了 —— 所以每次开机压制前都重发一次。

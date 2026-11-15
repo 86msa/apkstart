@@ -17,6 +17,7 @@ const { Provisioner } = require('./provision');
 const { EmulatorEngine } = require('./emulator');
 const doctor = require('./doctor');
 const container = require('./container');
+const backends = require('./backends');
 
 const LOG_DIR = path.join(store.DATA_DIR, 'logs');
 const MONITOR_PORT = 5556;
@@ -63,8 +64,45 @@ class Runtime {
     this._bootLog = [];
     this._activeApps = new Set();  // 容器会话：当前打开的应用窗口
     this.emuSerial = EMU_SERIAL;   // 端口是动态挑的，serial 跟着变
+    /**
+     * 后端适配层：把「安卓从哪来」从本类里抽出去。
+     * 默认是自带 emulator；改成 mumu 等第三方底座后，开机/关机/找窗口都交给它，
+     * 本类只保留与底座无关的部分（adb 客户端、容器会话、网络、看门狗）。
+     */
+    this._backend = null;
+    this._backendId = '';
     store.ensureDirs();
     if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
+  }
+
+  /**
+   * 当前后端实例（按设置惰性创建；改了设置下次访问就会换）。
+   * @returns {import('./backends/base').Backend}
+   */
+  get backend() {
+    const want = (this.settings.engine && this.settings.engine.mode) === 'attach'
+      ? 'builtin'
+      : String((this.settings.engine && this.settings.engine.mode) || 'builtin');
+    if (!this._backend || this._backendId !== want) {
+      const made = backends.create({
+        appRoot: this.appRoot, settings: this.settings, runtime: this, store, log: (l) => this.log(l),
+      });
+      this._backend = made.backend;
+      this._backendId = made.id;
+    }
+    return this._backend;
+  }
+
+  /** 后端 id（'builtin' / 'mumu' / …），界面和日志用 */
+  get backendId() { return this.backend.id; }
+
+  /** 换底座后要丢掉旧的连接与端口假设 */
+  resetBackend() {
+    if (this._backend && this._backend.dispose) {
+      try { this._backend.dispose(); } catch (_) { /* ignore */ }
+    }
+    this._backend = null;
+    this._backendId = '';
   }
 
   get settings() { return store.getSettings(); }
@@ -77,16 +115,22 @@ class Runtime {
   adbPath() {
     const s = this.settings;
     const p = this.provisioner.paths();
-    if (s.adbPath && fs.existsSync(s.adbPath)) return s.adbPath;
+    // 自带 adb 永远排在第一位：第三方底座（MuMu 等）也会把设备注册到同一个 adb server，
+    // 用自带的那份能保证「同一台设备只有一份 adb 状态」，不会出现 offline 反复抖动。
     if (fs.existsSync(p.adbExe)) return p.adbExe;
+    if (s.adbPath && fs.existsSync(s.adbPath)) return s.adbPath;
     const local = path.join(this.appRoot, 'tools', 'platform-tools', 'adb.exe');
     if (fs.existsSync(local)) return local;
     return AdbClient.resolveAdb('', this.appRoot);
   }
 
   client(serial) {
+    // 后端自己报了 serial 就优先用它（MuMu 的 127.0.0.1:16384 这类）
+    const backendSerial = this._backend ? this._backend.serial : '';
     const useSerial = serial
-      || (this.settings.engine.mode === 'attach' ? this.settings.device : this.emuSerial);
+      || (this.settings.engine.mode === 'attach' ? this.settings.device : '')
+      || backendSerial
+      || this.emuSerial;
     const adbPath = this.adbPath();
     if (!this._client || this._client.serial !== useSerial || this._client.adbPath !== adbPath) {
       // 换端口/换 adb 时别把旧的常驻 adb shell 留在后台占着连接
@@ -106,11 +150,71 @@ class Runtime {
   // ---------------- 状态 ----------------
 
   async status() {
+    const backend = this.backend;
+    // 第三方底座（MuMu 等）不走自带镜像那套「缺 adb / 缺 emulator / 缺系统镜像」的判定，
+    // 直接用底座自己的 check()。
+    if (backend.id !== 'builtin') {
+      const s0 = this.settings;
+      const check = await backend.check().catch((e) => ({ ok: false, reason: e.message }));
+      const client = this.client();
+      const result = {
+        mode: s0.engine.mode,
+        backend: backend.id,
+        backendLabel: backend.label,
+        installed: !!check.ok,
+        env: { backend: backend.id },
+        engineKind: backend.id,
+        emulatorOk: !!check.ok,
+        sysimgOk: !!check.ok,
+        adbOk: !!check.ok,
+        vmRunning: backend.running(),
+        vmStarting: this.vmStarting,
+        installing: this.installing,
+        deviceOnline: false,
+        android: '',
+        sdk: 0,
+        freeform: false,
+        ready: false,
+        needsSetup: check.ok ? null : (check.needs || 'backend'),
+        error: check.ok ? '' : (check.reason || ''),
+        serial: backend.serial || '',
+        autoProfile: '',
+        diagnosis: null,
+        attempts: [],
+        lastFailure: null,
+      };
+      if (!check.ok) {
+        result.phase = 'idle';
+        return result;
+      }
+      try {
+        result.deviceOnline = backend.serial ? await client.isOnline() : false;
+        if (result.deviceOnline) {
+          const [android, sdk, ff] = await Promise.all([
+            client.androidVersion().catch(() => ''),
+            client.sdkInt().catch(() => 0),
+            client.shell('settings get global enable_freeform_support').catch(() => '0'),
+          ]);
+          result.android = android;
+          result.sdk = sdk;
+          result.freeform = String(ff).trim() === '1' || this._freeformReady;
+        }
+      } catch (e) {
+        result.error = e.message;
+      }
+      result.ready = !!result.deviceOnline;
+      result.needsSetup = result.ready ? null : 'boot';
+      result.phase = result.ready ? 'ready' : (result.vmRunning ? 'booting' : 'idle');
+      return result;
+    }
+
     const env = await this.provisioner.checkEnv();
     const s = this.settings;
     const client = this.client();
     const result = {
       mode: s.engine.mode,
+      backend: backend.id,
+      backendLabel: backend.label,
       installed: !!s.runtime.installed,
       env,
       engineKind: env.engine,
@@ -234,6 +338,19 @@ class Runtime {
   }
 
   async boot({ install = false, onLog = () => {} } = {}) {
+    const backend = this.backend;
+    // 第三方底座：开机/连接都交给它，失败了直接返回原因（不再走 QEMU 兜底）
+    if (backend.id !== 'builtin') {
+      const r = await backend.ensure({ onLog });
+      if (!r || !r.ok) return { ok: false, error: (r && r.error) || `${backend.label}启动失败` };
+      this.emuSerial = r.serial || backend.serial;
+      const client = this.client(this.emuSerial);
+      await this.prepare(client);
+      return {
+        ok: true, client, engine: backend.id, serial: this.emuSerial, backend: backend.id, network: null,
+      };
+    }
+
     const env = await this.provisioner.checkEnv();
     this._hv = env.hypervisor;
 
@@ -368,6 +485,12 @@ class Runtime {
     const t0 = Date.now();
     const p = (async () => {
       try {
+        // 第三方底座：直接叫它开机，不需要检查 apkstart 自己的镜像环境
+        if (this.backend.id !== 'builtin') {
+          const r = await this.ensure({ onLog: (m) => onLog(`预热：${m}`) });
+          if (r && r.ok) return { ok: true, bootMs: Date.now() - t0 };
+          return { ok: false, error: r && r.error };
+        }
         const env = await this.provisioner.checkEnv();
         if (!(env.adb.ok && env.emulator.ok && env.sysimg.ok)) return { ok: false, skipped: 'not-ready' };
         const r = await this.ensure({ onLog: (m) => onLog(`预热：${m}`) });
@@ -534,6 +657,16 @@ class Runtime {
 
   /** 优雅停止：emulator 走控制台关机，QEMU 走 monitor */
   async stop({ graceful = true } = {}) {
+    const backend = this.backend;
+    // 第三方底座：交给它自己关（MuMu 走 control shutdown）。
+    // 注意：只有用户明确「停止运行时」或切底座时才走到这里，
+    // ApkStart 正常退出不会关掉用户的模拟器。
+    if (backend.id !== 'builtin') {
+      this._activeApps.clear();
+      const r = await backend.stop({ graceful });
+      this._client = null;
+      return !!(r && r.ok);
+    }
     const adbPath = this.adbPath();
     if (this.emulator.running()) {
       await this.emulator.stop({ adbPath });
@@ -797,6 +930,32 @@ class Runtime {
   }
 
   async _ensureInner({ onLog = () => {} } = {}) {
+    const backend = this.backend;
+    // ---------------- 第三方底座（MuMu 等） ----------------
+    // 这类底座自己管镜像和虚拟机，apkstart 只负责「叫它起来 + 连上 adb + 找窗口」。
+    // 绝不能在这里走 adoptExisting / killOrphanEmulators：那两段会按 qemu 进程
+    // 强杀模拟器，用错底座就会把用户自己开着的模拟器一起杀掉。
+    if (backend.id !== 'builtin') {
+      const r = await backend.ensure({ onLog });
+      if (!r || !r.ok) {
+        return { ok: false, error: (r && r.error) || `${backend.label}未能启动`, needsSetup: 'backend' };
+      }
+      this.emuSerial = r.serial || backend.serial;
+      const client = this.client(this.emuSerial);
+      if (!(await client.isOnline())) {
+        // 再给一次 connect 机会：MuMu 的 adbd 有时比 is_android_started 晚几秒
+        await client.connect().catch(() => false);
+        await this.waitAdb(client, 30000, onLog).catch(() => false);
+      }
+      if (!(await client.isOnline())) {
+        return { ok: false, error: `${backend.label}已启动，但 adb 连不上（${this.emuSerial}）` };
+      }
+      await this.prepare(client);
+      return {
+        ok: true, client, engine: backend.id, reused: !!r.reused, backend: backend.id, network: null,
+      };
+    }
+
     const client = this.client();
     if (await client.isOnline()) {
       await this.prepare(client);
@@ -1123,6 +1282,16 @@ class Runtime {
    * @returns {Promise<{ok:boolean,reason:string,ip?:string,gateway?:string}>}
    */
   async waitForNetwork({ timeoutMs = 90000, onLog = () => {}, adbPath = '' } = {}) {
+    // 第三方底座（MuMu 等）的网络是它自己桥接好的，没有 netsimd 那一套；
+    // 只要 adb 在线并且能解析 DNS 就认为网络可用，不做耗时的 ping 循环。
+    if (this.backend.id !== 'builtin') {
+      const online = await this.client().isOnline().catch(() => false);
+      if (!online) return { ok: false, reason: 'device-offline' };
+      const r = await this.client()
+        .shell('ping -c 1 -W 2 223.5.5.5 >/dev/null 2>&1 && echo OK || echo FAIL', { timeout: 8000 })
+        .catch(() => 'FAIL');
+      return { ok: String(r).includes('OK'), reason: String(r).includes('OK') ? '' : 'no-route' };
+    }
     const t0 = Date.now();
     let last = null;
     let lastNotice = 0;
@@ -1224,6 +1393,10 @@ class Runtime {
   dispose() {
     if (this._watchdog) clearInterval(this._watchdog);
     if (this._client && this._client.disposeInput) this._client.disposeInput();
+    // 第三方底座绝不在这里关机：用户可能正用着它自己的模拟器
+    if (this._backend && this._backend.dispose) {
+      try { this._backend.dispose(); } catch (_) { /* ignore */ }
+    }
     this.emulator.cancelSnapshotSave();
     // 这里【绝对不能】强杀 qemu：
     //  1) 强杀会把正在写盘的 quickboot 快照截断，只留下几 GB 的 ram.img 空壳，
