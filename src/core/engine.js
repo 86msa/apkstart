@@ -63,6 +63,8 @@ class Runtime {
     this._client = null;
     this._bootLog = [];
     this._activeApps = new Set();  // 容器会话：当前打开的应用窗口
+    // 多窗口模式下被墓碑化（force-stop 但保留数据）的后台应用；下次点开走热恢复。
+    this._tombstoned = new Set();
     // 最近一次网络体检结果。状态栏要显示「网络正常/未联网」，但状态是高频轮询的，
     // 不能每次都去 guest 里跑一遍 shell；这里只缓存结论，过期（>5 分钟）就不采信。
     this._lastNetwork = null;
@@ -1179,20 +1181,47 @@ class Runtime {
     const first = this._activeApps.size === 0;
     this._activeApps.add(pkg);
     this.touch();
-    const state = container.nextSessionState([...this._activeApps], 'open', pkg);
     const s = this.settings;
     const mode = (s.engine && s.engine.priorityMode) || 'balanced';
-    const level = mode === 'game' ? 'game'
-      : mode === 'performance' ? 'normal' : 'below';
+    // 有应用在前台时的调度级别。balanced 用 normal（不是 below）：
+    // below 会让 qemu 在系统繁忙时被饿到，表现为视频解码掉帧、点击要等一下才响应 ——
+    // 这正是「点击不跟手」的主因。normal 只是与桌面同档，并不额外吃 CPU/内存/GPU。
+    const level = mode === 'game' ? 'game' : 'normal';
 
     if (first) {
       // 有应用要开了：把「空闲存快照」推迟，别在应用启动时抢磁盘
       this.emulator.cancelSnapshotSave();
-      await this.emulator.setPriority(level).catch(() => {});
+    }
+    // 每次打开/切回应用都确保优先级到位：endApp 会把空闲的 qemu 降到 idle，
+    // 切换回来时若不重新提，就会停在低优先级 → 点起来发木。setPriority 幂等，
+    // 已经是目标值时脚本内部不改、开销极小。
+    await this.emulator.setPriority(level).catch(() => {});
+    if (first) {
       try { onActive(true); } catch (_) { /* 轮询启动失败不影响打开应用 */ }
     }
 
+    // 多窗口模式（B 方案）：开新应用**不再** force-stop 其它应用，否则等于没多开。
+    // 改为按墓碑策略回收「太久没看的后台」，既允许多个并存、又不会内存失控。
+    // 关掉 multiWindow 时退回旧的「只留当前这个」行为，保证可回退。
+    if (s.engine && s.engine.multiWindow) {
+      const roles = container.sessionRoles([...this._activeApps], pkg);
+      const { tombstone } = container.planTombstones({
+        background: roles.background,
+        keepRecent: Number(s.engine.keepBackground) >= 0 ? Number(s.engine.keepBackground) : 1,
+      });
+      const cmds = container.buildTombstoneCommands(tombstone);
+      if (cmds.length) {
+        await this.client().shell(cmds.join(' ; '), { timeout: 20000 }).catch(() => '');
+        for (const p of tombstone) this._tombstoned.add(p);   // 记下被挂起的，下次点开热恢复
+        this.log(`多窗口：前台 ${pkg}，保留后台 ${roles.background.length - tombstone.length} 个，墓碑化 ${tombstone.length} 个`);
+      } else {
+        this.log(`多窗口：${roles.count} 个应用并存，无需回收`);
+      }
+      return { ...roles, plan: { commands: cmds, stopped: tombstone } };
+    }
+
     const installed = store.getApps().map((a) => a && a.package).filter(Boolean);
+    const state = container.nextSessionState([...this._activeApps], 'open', pkg);
     const plan = container.buildSessionCommands({
       pkg,
       installed,
@@ -1271,11 +1300,29 @@ class Runtime {
     if (!init || !cur) return;
     const initLand = Number(init[1]) > Number(init[2]);
     const curLand = Number(cur[1]) > Number(cur[2]);
-    if (initLand === curLand) return;   // 一致，什么都不做
-    this.log(`方向自愈：init=${init[1]}x${init[2]} cur=${cur[1]}x${cur[2]} 已躺倒，重新锁方向`);
-    await c.resetDisplayOverrides(wantLand).catch(() => {});
-    // 应用已经在前台，再补一次（resetDisplayOverrides 可能被随后起来的 Activity 覆盖）
-    await c.setOrientation(wantLand).catch(() => {});
+    if (initLand !== curLand) {
+      // 真躺倒了：重新锁方向 + 忽略应用方向请求 + 恢复 density
+      this.log(`方向自愈：init=${init[1]}x${init[2]} cur=${cur[1]}x${cur[2]} 已躺倒，重新收敛`);
+      await c.resetDisplayOverrides(wantLand).catch(() => {});
+      await c.setOrientation(wantLand).catch(() => {});
+      return;
+    }
+    // 没躺倒 ≠ 状态就对。横屏平板模式依赖两个易丢的运行时状态：
+    //   - mSetIgnoreOrientationRequest=true（快照恢复 / framework 重启后经常回到 false）
+    //   - wm density 覆盖为 190（sw≥600dp 才走平板排版；同样会被 reset 掉）
+    // 这两项一旦丢失，横屏桌面就会退回手机形态 —— 正是「横屏不稳定」的表现。
+    // 这里做一次轻量校验，缺哪个补哪个（都是幂等命令，正常情况不写）。
+    if (wantLand) {
+      const win = await c.shell('dumpsys window | grep -oE "mSetIgnoreOrientationRequest=(true|false)"', { timeout: 8000 }).catch(() => '');
+      const ignoreOk = /mSetIgnoreOrientationRequest=true/.test(String(win));
+      const dens = await c.shell('wm density', { timeout: 6000 }).catch(() => '');
+      const densityOk = /Override density:\s*190/.test(String(dens));
+      if (!ignoreOk || !densityOk) {
+        this.log(`横屏状态收敛：ignore-orientation=${ignoreOk} density190=${densityOk} → 补齐`);
+        if (!ignoreOk) await c.shell('wm set-ignore-orientation-request true', { timeout: 8000 }).catch(() => {});
+        if (!densityOk) await c.shell('wm density 190', { timeout: 8000 }).catch(() => {});
+      }
+    }
   }
 
   startWatchdog() {

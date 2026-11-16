@@ -517,6 +517,33 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(/opts\.enabled && !game/.test(aw), 'game 模式不能装 WH_MOUSE_LL 全局钩子');
   });
 
+  await test('前台应用优先级不能用 below（点击跟手 / 视频不掉帧）', () => {
+    const engJs = fs.readFileSync(path.join(__dirname, '..', 'src', 'core', 'engine.js'), 'utf8');
+    // balanced/performance 有应用在前台时必须是 normal：below 会让 qemu 被饿，
+    // 表现为视频解码掉帧、点击要等一下才响应（用户说的「点击不跟手」主因）。
+    const begin = engJs.slice(engJs.indexOf('async beginApp'));
+    assert(/mode === 'game' \? 'game' : 'normal'/.test(begin),
+      "beginApp 前台优先级应映射为 game→game、其余→normal");
+    assert(!/performance.*\? 'normal' : 'below'/.test(begin),
+      '不能再把 balanced 落到 below');
+    // 每次打开/切回都要重设优先级：endApp 会降到 idle，切换回来不提权就会发木
+    const setIdx = begin.indexOf("setPriority(level)");
+    const firstIdx = begin.indexOf("if (first)");
+    assert(setIdx > -1, 'beginApp 要调 setPriority');
+    // setPriority 不应只在第一个 if(first) 块里 —— 切换应用（非 first）也要提权
+    const firstBlock = begin.slice(firstIdx, begin.indexOf('\n\n', firstIdx));
+    assert(!/setPriority\(level\)/.test(firstBlock) || begin.split('setPriority(level)').length >= 2,
+      'setPriority 要在每次 beginApp 都执行，不只第一次');
+  });
+
+  await test('省资源模式应下调内存上限（减运行占用）', () => {
+    const doc = fs.readFileSync(path.join(__dirname, '..', 'src', 'core', 'doctor.js'), 'utf8');
+    assert(/rmode === 'save'[\s\S]{0,120}2048/.test(doc),
+      'save 模式要把 memoryMB 压到 2048（省约 1GB 内存 + 1GB 快照磁盘）');
+    // 手动指定内存时永远优先，不能被 save 覆盖
+    assert(/!overrides\.memoryMB/.test(doc), 'save 收敛内存要让位于用户手动值');
+  });
+
   await test('新版 emulator 写的 ram.bin 必须被认作完整快照（否则刚存好的 3GB 会被当空壳删掉）', () => {
     const { EmulatorEngine } = require('../src/core/emulator');
     const emu = new EmulatorEngine(path.join(__dirname, '..'));
@@ -923,7 +950,12 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(/_healOrientation/.test(engJs), '要有方向自愈方法');
     assert(/init=\(\\d\+\)x\(\\d\+\)/.test(engJs), '要读 init 面板尺寸');
     assert(/cur=\(\\d\+\)x\(\\d\+\)/.test(engJs), '要读 cur 逻辑空间');
-    assert(/initLand === curLand/.test(engJs), '一致时应直接返回（零写入）');
+    assert(/initLand !== curLand/.test(engJs), '只在宽高顺序相反（真躺倒）时才重锁方向');
+    // 横屏平板模式的稳定性：没躺倒也要校验 ignore-orientation + density 是否丢失并补齐
+    assert(/mSetIgnoreOrientationRequest=true/.test(engJs), '横屏要校验 ignore-orientation 是否还在');
+    assert(/Override density:\s*190|density.*190/.test(engJs), '横屏要校验 density 190 是否还在');
+    assert(/wm set-ignore-orientation-request true/.test(engJs), '丢了要补 ignore-orientation');
+    assert(/wm density 190/.test(engJs), '丢了要补 density 190');
     assert(/_healOrientation/.test(engJs.slice(engJs.indexOf('startWatchdog'))), '看门狗要周期自愈');
     // 应用刚起来 Activity 重建会覆盖方向，需要在那个时机补一次
     assert(/onAppUp[\s\S]{0,600}_healOrientation/.test(mainJs), '应用起来后要立刻校正一次');

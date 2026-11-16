@@ -74,6 +74,12 @@ const DEFAULT_SETTINGS = {
     // 预热：启动 ApkStart 后在后台把安卓环境引导好，第一次点应用几乎不用等。
     // 代价是常驻约 1GB 内存（和 WSA / 应用宝电脑版一样的取舍），可随时关掉。
     prewarm: true,
+    // 多窗口（B 方案）：允许同时打开多个应用、各自独立窗口。默认关闭，
+    // 保持「开新停旧」的单窗口行为；开启后靠墓碑机制回收后台，资源可控。
+    multiWindow: false,
+    // 多窗口时保留最近几个后台应用不墓碑化（便于秒切回、不掉登录态）。
+    // 0 = 最省内存（只留前台），默认 1。
+    keepBackground: 1,
   },
   runtime: {
     dir: '',                 // 空 = %APPDATA%\apkstart\runtime
