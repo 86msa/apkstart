@@ -367,8 +367,36 @@ async function attachAppWindow() {
   return ok;
 }
 
-/** 打开（或复用）那个「一个应用一个干净窗口」 */
-function openAppWindow(pkg, tip) {
+/**
+ * 打开（或复用）那个「一个应用一个干净窗口」。
+ *
+ * 切换应用时必须先把**上一个**应用真正关掉，否则会出现用户反馈的
+ * 「点开第二个应用，第一个没响应 / ANR」：
+ *   - appWin.open() 里对旧窗口用的是 close({keepApp:true})，它只收窗口、
+ *     **不调 endApp**，于是旧应用进程既没被 force-stop，也留在
+ *     runtime._activeApps 里；
+ *   - 新应用 beginApp 时 `first = _activeApps.size === 0` 因此判断错误，
+ *     优先级 / 快照逻辑全乱；
+ *   - 两个应用同时抢同一个模拟器的前台 → 旧的卡死弹 ANR。
+ * 所以这里先 await 把旧应用停干净，再开新窗口。
+ */
+async function openAppWindow(pkg, tip) {
+  // 只有「切到另一个应用」才需要关旧的；重复点同一个走复用路径，不打断。
+  if (currentAppPkg && currentAppPkg !== pkg && appWin && appWin.isOpen) {
+    const prev = currentAppPkg;
+    try {
+      // 先摘画面再停进程：独立窗口模式下模拟器原生窗口是用户正看着的那扇，
+      // park 把它藏好，避免销毁宿主时在桌面留下黑窗。
+      await appWin.close({ keepApp: true });
+      await runtime.endApp(prev, { onIdle: onContainerActive }).catch(() => {});
+      appLog(`switch: closed ${prev} before launching ${pkg}`);
+    } catch (e) {
+      appLog(`switch close ${prev} failed: ${e && e.message}`);
+    }
+  } else if (currentAppPkg && currentAppPkg !== pkg) {
+    // 窗口已经不在了，但进程可能还挂在 _activeApps 里，同样要收尾。
+    await runtime.endApp(currentAppPkg).catch(() => {});
+  }
   const rec = store.getApp(pkg);
   const land = !!displaySettings().landscape;
   const p0 = portraitSize();
@@ -413,10 +441,21 @@ async function toggleDisplayMode() {
 
 /** 首次运行把 adb / emulator / 系统镜像一次装完，不再分 1~5 步 */
 let deploying = false;
-async function autoDeploy() {
+async function autoDeploy({ force = false } = {}) {
   if (deploying || !store.getSettings().autoDeploy) return { ok: false, error: 'skipped' };
+  // 下载失败冷却：以前只要 checkEnv() 还缺组件，每次启动 ApkStart 都会重新
+  // 拉一遍 1.5GB 的运行时包，用户看到的就是「一直重复下载」。
+  // 失败后记一个时间戳，30 分钟内不再自动重试；用户手动点「一键部署」时
+  // force=true 可以立刻重试。成功或人为强制都清掉冷却。
+  const COOLDOWN_MS = 30 * 60 * 1000;
+  const lastFail = Number(store.getSettings().runtime.deployFailedAt || 0);
+  if (!force && lastFail && Date.now() - lastFail < COOLDOWN_MS) {
+    appLog(`autoDeploy 冷却中（上次失败于 ${new Date(lastFail).toISOString()}），跳过自动重试`);
+    return { ok: false, error: 'cooldown', cooldown: true, until: lastFail + COOLDOWN_MS };
+  }
   deploying = true;
   const progress = (p) => send('provision:progress', { ...p, component: p.component || 'all' });
+  let succeeded = false;
   try {
     const env = await runtime.provisioner.checkEnv();
     const needEngine = !env.emulator.ok || !env.sysimg.ok;
@@ -428,7 +467,10 @@ async function autoDeploy() {
         progress({ message: '正在从 GitHub 下载运行时…' });
         await runtime.provisioner.installRuntimePack(progress);
         const afterPack = await runtime.provisioner.checkEnv();
-        if (afterPack.emulator.ok && afterPack.sysimg.ok) return { ok: true, source: 'github' };
+        if (afterPack.emulator.ok && afterPack.sysimg.ok) {
+          succeeded = true;
+          return { ok: true, source: 'github' };
+        }
         progress({ message: '运行时整包不完整，改用官方源补齐…' });
       } catch (e) {
         progress({ message: `GitHub 运行时不可用（${e.message}），改用官方源…` });
@@ -447,10 +489,15 @@ async function autoDeploy() {
       await runtime.provisioner.installSystemImage(progress);
     }
     const after = await runtime.provisioner.checkEnv();
-    return { ok: !!(after.adb.ok && after.emulator.ok && after.sysimg.ok) };
+    succeeded = !!(after.adb.ok && after.emulator.ok && after.sysimg.ok);
+    return { ok: succeeded };
   } catch (e) {
     return { ok: false, error: e.message };
   } finally {
+    // 只有「真失败」才进冷却；部署成功要把旧失败记录清掉。
+    try {
+      store.saveSettings({ runtime: { deployFailedAt: succeeded ? 0 : Date.now() } });
+    } catch (_) { /* 设置写不进去不影响本次结果 */ }
     deploying = false;
   }
 }
@@ -745,7 +792,7 @@ async function runLaunch(pkg) {
   appLog(`launch start ${pkg}`);
   try {
     // 1) 先把「应用窗口」打开显示启动动画：整个过程看不到安卓桌面，也看不到模拟器窗口
-    openAppWindow(pkg, '正在启动安卓运行时…');
+    await openAppWindow(pkg, '正在启动安卓运行时…');
     // 开机阶段把模拟器主窗 + qemu / netsimd 的控制台黑窗藏起来，避免任何闪现。
     // 压制是常驻的（embed 后它会自动跳过被嵌入的那一个窗口，见 appwin.embed）。
     // 这里必须 await：不等压制生效就往下走，黑窗会在启动瞬间露出来。
@@ -1187,7 +1234,8 @@ function registerIpc() {
   ipcMain.handle('display:toggle', () => toggleDisplayMode());
 
   ipcMain.handle('shortcut:rebuild', async () => ({ ok: true, fixed: await installer.ensureShortcuts() }));
-  ipcMain.handle('runtime:autoDeploy', () => autoDeploy());
+  // 用户手动点「一键部署」时强制重试，绕过失败冷却
+  ipcMain.handle('runtime:autoDeploy', (_e, opts = {}) => autoDeploy({ force: !!opts.force }));
   // 关闭「深度裁剪」时把被 pm disable-user 的系统包恢复回来
   ipcMain.handle('settings:restoreSystem', async () => runtime.restoreSystemApps());
   // 鼠标键位改变：只同步配置，不再无条件卸载（右键返回/滚轮可能仍需要钩子）

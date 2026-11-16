@@ -1029,6 +1029,61 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
       'onCloseApp 也要清 currentAppPkg');
   });
 
+  await test('旧版本清理：能发现任意位置的 ApkStart 目录，且绝不碰当前运行版本', () => {
+    const os = require('os');
+    const leftovers = require('../src/core/leftovers');
+    const np = (p) => { try { return path.resolve(p).toLowerCase(); } catch (_) { return String(p).toLowerCase(); } };
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'apkstart-left-'));
+    try {
+      // 造三个「旧版本」目录 + 一个「当前版本」目录，每个里面放一个假的 ApkStart.exe
+      const mk = (name) => {
+        const d = path.join(root, name);
+        fs.mkdirSync(d, { recursive: true });
+        fs.writeFileSync(path.join(d, 'ApkStart.exe'), 'fake-exe');
+        return d;
+      };
+      const old1 = mk('ApkStart-v0.3.9-win64-portable');
+      const old2 = mk('ApkStart-win64-portable.prev-2026-01-01T00-00-00-000Z'); // 打包备份残留
+      const curDir = mk('ApkStart-v0.5.0-win64-portable');
+
+      const r = leftovers.scan({ installDir: curDir, dataDir: root, avdHome: '' });
+      const found = r.items.filter((i) => i.kind === 'dir').map((i) => np(i.path));
+
+      assert(found.includes(np(old1)), '普通旧版本目录没被发现');
+      // .prev-* 是 pack.js 每次改名保留的备份，以前完全清不掉，现在必须能发现
+      assert(found.includes(np(old2)), '.prev 打包备份残留没被发现');
+      // 关键安全约束：当前正在运行的那个绝不能出现在待删列表里
+      assert(!found.includes(np(curDir)), '当前运行版本被当成旧版本（危险）');
+    } finally {
+      try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) { /* ignore */ }
+    }
+  });
+
+  await test('切换应用必须先干净关掉上一个，否则旧应用 ANR / _activeApps 残留', () => {
+    const root = path.join(__dirname, '..');
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+
+    // openAppWindow 现在必须是 async：切换时要 await 把旧应用停干净再开新的。
+    assert(/async function openAppWindow/.test(mainJs), 'openAppWindow 必须 async（要等旧应用收尾）');
+    // 调用处也必须 await，否则 close/endApp 和新应用启动并发 → 抢前台 → ANR
+    assert(/await openAppWindow\(/.test(mainJs), 'runLaunch 里必须 await openAppWindow');
+
+    // 核心：切到「另一个」应用时，必须先 endApp(旧) —— 只收窗口不停进程是 bug 根源
+    const fn = mainJs.slice(mainJs.indexOf('async function openAppWindow'));
+    const body = fn.slice(0, fn.indexOf('\n}', fn.indexOf('currentAppPkg = pkg')));
+    assert(/currentAppPkg !== pkg/.test(body), '只在切换到不同应用时才关旧的（同应用走复用）');
+    assert(/runtime\.endApp\(prev/.test(body) || /runtime\.endApp\(currentAppPkg/.test(body),
+      '切换时必须真正 endApp 旧应用（force-stop + 移出 _activeApps）');
+    // appWin.open() 内部用的是 close({keepApp:true})，不 endApp；
+    // 所以外层必须显式补上 endApp，不能指望 open 里的 close。
+    assert(/close\(\{ keepApp: true \}\)/.test(body) && /endApp/.test(body),
+      '先 park 画面（close keepApp）再 endApp 停进程，顺序要对');
+
+    // 窗口已不在但进程还挂在 _activeApps 的情况也要收尾
+    assert(/else if \(currentAppPkg && currentAppPkg !== pkg\)/.test(body),
+      '窗口不在时也要清掉残留的 _activeApps 进程');
+  });
+
   await test('自动全屏和横屏必须是活的：设置项得有消费方，且启动时校正面板方向', () => {
     const root = path.join(__dirname, '..');
     const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
