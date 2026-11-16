@@ -1,4 +1,4 @@
-# Microsoft Store 提交材料（ApkStart 0.5.0）
+# Microsoft Store 提交材料（ApkStart 0.5.1）
 
 > 这份文件是给 Partner Center 表单直接复制用的。包体、图标、清单由脚本产出，
 > 只有「注册账号 → 预留名称 → 上传 → 送审」必须在网页上人工完成。
@@ -12,11 +12,33 @@
 | Product name | `ApkStart` |
 | Category | Developer tools → Utilities & tools（备选：Productivity） |
 | Price | Free |
-| Package | `dist/store/ApkStart_0.5.0.0_x64.msix`（x64，约 852 MB） |
+| Package | `dist/store/ApkStart_0.5.1.0_x64.msix`（x64，约 852 MB） |
 | 支持语言 | 简体中文 / English (United States) |
 | 官网 | https://github.com/RoutineMiku/apkstart |
 | 支持邮箱 | <!-- 填你的邮箱 --> |
 | 隐私政策 | https://github.com/RoutineMiku/apkstart/blob/main/docs/privacy.md（或自建页面） |
+
+### 本版新增（Partner Center → **What's new in this version**，直接粘贴）
+
+**中文**
+```
+0.5.1 修复了以下问题：
+· 切换到另一个屏幕方向的应用时，等待换向的约 40 秒内会显示「正在切换…」窗口，不再是一片空白桌面。
+· 冷启动时不再误报「虚拟机没有网络」并建议重置安卓数据（实际上几秒后就会自动连上）。
+· 修复了换向重启后偶发「应用启动失败」的问题（旧实例已被关闭却被误判为可复用）。
+· 点击另一个应用时，若上一个应用仍在启动，新的启动会排队等待，不再互相打断。
+· 开机瞬间一闪而过的控制台黑框已消除；应用窗口不再短暂显示上一个应用的名字。
+```
+
+**English**
+```
+0.5.1 fixes:
+· A "switching orientation…" window is now shown during the ~40s panel change instead of a blank desktop.
+· The startup log no longer falsely reports "no network" and suggests resetting Android data.
+· Fixed an occasional "app failed to start" after an orientation restart (a closed instance was reused).
+· Launching another app while one is still starting now queues instead of interrupting it.
+· No more console-window flash during boot, and the app window no longer briefly shows the previous app's name.
+```
 
 ---
 
@@ -205,12 +227,14 @@ Notes:
 1. 打开 <https://partner.microsoft.com/dashboard>，进入 **Apps and games → New product → MSIX or PWA app**。
 2. 预留名称 `ApkStart`，进入 **Product management → Product identity**，
    复制 `Package/Identity/Name` 与 `Package/Identity/Publisher`。
-3. 如果这两个值和 `RoutineMiku.ApkStart` / `CN=RoutineMiku` 不同，重新出包：
+3. 身份值**已经是确认值**（`RoutineMiku.ApkStart` / `CN=58CA1DED-…`），
+   直接 `node build/msix.js` 打出来的就是对的；`build/msix.js` 有守卫，
+   Publisher 里没有 `58CA1DED` 会直接退出（退出码 3），不会再产出废包。
+   仅当 Partner Center 显示的值与此不同才需要覆盖：
    ```powershell
    node build/msix.js --identity "<Identity/Name>" --publisher "<Identity/Publisher>"
    ```
-   （只换图标不需要改身份，直接 `node build/msix.js` 即可。）
-4. **Packages** → 上传 `dist/store/ApkStart_0.5.0.0_x64.msix`，等待校验通过。
+4. **Packages** → 上传 `dist/store/ApkStart_0.5.1.0_x64.msix`，等待校验通过。
 5. **Store listing** → 填第 2–5 节的内容、上传截图、选分类。
 6. **Pricing and availability** → Free，市场选中国 + 全球。
 7. **Submission options** → 粘贴第 6 节的 certification notes。
