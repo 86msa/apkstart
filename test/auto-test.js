@@ -2115,6 +2115,45 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     }
   });
 
+  await test('包内压缩镜像必须算「已就位」，否则装完还会联网重下 1.5GB', () => {
+    const fs2 = require('fs');
+    const os2 = require('os');
+    const tmp = fs2.mkdtempSync(path.join(os2.tmpdir(), 'packed-img-'));
+    const oldAppData = process.env.APPDATA;
+    process.env.APPDATA = path.join(tmp, 'appdata');
+    const sparse = (file, size) => {
+      fs2.mkdirSync(path.dirname(file), { recursive: true });
+      fs2.writeFileSync(file, '');
+      fs2.truncateSync(file, size);   // 稀疏文件：不真占盘，只是体积够大
+    };
+    try {
+      const store = require('../src/core/store');
+      const { Provisioner } = require('../src/core/provision');
+      // 模拟完整版安装包 / 商店 MSIX：运行时目录里只有 .xz，没有展开的 system.img
+      const root = path.join(tmp, 'rt');
+      const dir = path.join(root, 'system-images', 'android-34', 'google_apis_playstore', 'x86_64');
+      sparse(path.join(dir, 'system.img.xz'), 320 * 1024 * 1024);
+      fs2.writeFileSync(path.join(dir, 'kernel-ranchu'), 'x');
+      store.saveSettings({ runtime: { dir: root } });
+      // appRoot 用空目录，避免被仓库里已展开的 engine/system-images 干扰
+      const p = new Provisioner(path.join(tmp, 'empty-app'));
+      const sys = p.systemImageInfo();
+      assert(sys.ok === true, '压缩镜像要算就位（否则 autoDeploy 会去下载）');
+      assert(sys.compressed === true, '要标记「还需展开一次」');
+      assert(String(sys.dir).toLowerCase().startsWith(root.toLowerCase()), '应指向包内位置');
+      const play = p.playImageInfo();
+      assert(play.ok === true && play.compressed === true, '兼容镜像同理');
+
+      // 展开后（有了 system.img）要变成 compressed=false，且优先用展开的那份
+      sparse(path.join(dir, 'system.img'), 320 * 1024 * 1024);
+      const after = p.systemImageInfo();
+      assert(after.ok === true && after.compressed === false, '展开后不应再标记为压缩版');
+    } finally {
+      if (oldAppData === undefined) delete process.env.APPDATA; else process.env.APPDATA = oldAppData;
+      fs2.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   console.log('\n[资源策略 / 磁盘分配 / 日志上限]');
 
   await test('资源策略一处切换，自动翻译成 vCPU/优先级/分辨率', () => {

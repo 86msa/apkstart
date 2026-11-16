@@ -54,13 +54,40 @@ const STAGE = path.resolve(String(arg('stage')
   || path.join(ROOT, 'dist', 'release', 'win-unpacked')));
 const OUT_DIR = path.resolve(String(arg('out') || path.join(ROOT, 'dist', 'store')));
 
+/**
+ * 选「载荷目录」：就是 MSIX 里 `app\` 下面那份 ApkStart.exe + resources。
+ *
+ * 两条来源，优先离线那条：
+ *   A. dist/ApkStart-win64-portable —— `node build/pack.js` 的产物，**不需要联网**。
+ *      它只有壳，不带运行时，所以这里额外把 build/runtime 复制进
+ *      resources/runtime（就是 electron-builder 的 extraResources 干的事）。
+ *   B. dist/release/win-unpacked —— `electron-builder --win dir` 的产物，自带
+ *      resources/runtime。但那一步会去 CDN 拉工具集，没网时会只解一半
+ *      （只剩 electron.exe、runtime 没复制），所以只作为备选。
+ *
+ * 用 --payload 可以显式指定。
+ */
+function resolvePayload() {
+  const explicit = arg('payload');
+  if (explicit) return { dir: path.resolve(String(explicit)), addRuntime: false };
+  const portable = path.join(ROOT, 'dist', 'ApkStart-win64-portable');
+  const runtime = path.join(ROOT, 'build', 'runtime');
+  if (fs.existsSync(path.join(portable, 'ApkStart.exe'))) {
+    const hasRuntime = fs.existsSync(path.join(portable, 'resources', 'runtime', 'emulator', 'emulator.exe'));
+    return { dir: portable, addRuntime: !hasRuntime && fs.existsSync(runtime), runtime };
+  }
+  return { dir: STAGE, addRuntime: false };
+}
+
 // ---------------- 资源图标 ----------------
 // 清单里只写 100% 尺寸的那 5 张图。一旦目录里出现 .scale-* / .targetsize-*
 // 文件，就必须额外生成 resources.pri（makepri），复杂度陡增 —— 首版不碰。
 const ASSETS = [
   { file: 'StoreLogo.png', w: 50, h: 50 },
   { file: 'Square44x44Logo.png', w: 44, h: 44 },
+  { file: 'Square71x71Logo.png', w: 71, h: 71 },
   { file: 'Square150x150Logo.png', w: 150, h: 150 },
+  { file: 'Square310x310Logo.png', w: 310, h: 310 },
   { file: 'Wide310x150Logo.png', w: 310, h: 150 },
   { file: 'SplashScreen.png', w: 620, h: 300 },
 ];
@@ -125,15 +152,28 @@ function composeIcon(w, h, side) {
   return encodePng(w, h, rgba);
 }
 
+/** 预渲染资源：build/build-icons.js 统一产出的主标与小尺寸简化标 */
+const STORE_ASSETS = path.join(ROOT, 'build', 'store-assets');
+
 function writeAssets(dir) {
   fs.mkdirSync(dir, { recursive: true });
+  const made = [];
   for (const a of ASSETS) {
-    const buf = (a.w === a.h)
-      ? drawAppIcon(a.w)
-      : composeIcon(a.w, a.h, Math.min(a.h * 0.72, a.w * 0.42));
+    const pre = path.join(STORE_ASSETS, a.file);
+    let buf = null;
+    if (fs.existsSync(pre)) {
+      buf = fs.readFileSync(pre);
+    } else {
+      // 回退：没跑过 build-icons 时仍能出包，但图标不保证跨尺寸统一
+      buf = (a.w === a.h)
+        ? drawAppIcon(a.w)
+        : composeIcon(a.w, a.h, Math.min(a.h * 0.72, a.w * 0.42));
+      console.warn(`  [回退] ${a.file} 未在 build/store-assets 找到，改用程序化绘制`);
+    }
     fs.writeFileSync(path.join(dir, a.file), buf);
+    made.push(`${a.file} ${a.w}x${a.h}`);
   }
-  return ASSETS.map((a) => `${a.file} ${a.w}x${a.h}`);
+  return made;
 }
 
 // ---------------- 清单 ----------------
@@ -197,7 +237,15 @@ function manifest() {
         BackgroundColor="#14161B"
         Square150x150Logo="Assets\\Square150x150Logo.png"
         Square44x44Logo="Assets\\Square44x44Logo.png">
-        <uap:DefaultTile Wide310x150Logo="Assets\\Wide310x150Logo.png" />
+        <!--
+          小磁贴/大磁贴的 logo 只能挂在 uap:DefaultTile 上，不能写在
+          uap:VisualElements 的属性里 —— 放错位置时 MakeAppx 会直接拒收整个包：
+          "?? DTD/??????? 'VisualElements' ??? 'Square71x71Logo'?"
+          （0x80080204 The package manifest is not valid）
+        -->
+        <uap:DefaultTile Wide310x150Logo="Assets\\Wide310x150Logo.png"
+          Square71x71Logo="Assets\\Square71x71Logo.png"
+          Square310x310Logo="Assets\\Square310x310Logo.png" />
         <uap:SplashScreen Image="Assets\\SplashScreen.png" BackgroundColor="#14161B" />
       </uap:VisualElements>
     </Application>
@@ -280,23 +328,37 @@ function run(exe, args, opts = {}) {
 // ---------------- 主流程 ----------------
 
 function stagePackage() {
-  const appSrc = STAGE;
+  const pick = resolvePayload();
+  const appSrc = pick.dir;
   if (!fs.existsSync(path.join(appSrc, 'ApkStart.exe'))) {
     console.error(`\n找不到 ${path.join(appSrc, 'ApkStart.exe')}。`);
-    console.error('先跑一次：npx electron-builder --win dir --x64');
-    console.error('（只有 dir 目标会把 build/runtime 放进 resources/runtime；');
-    console.error('  手工拼出来的 dist/ApkStart-win64-portable 不含完整运行时。）\n');
+    console.error('两条路：');
+    console.error('  A) node build/pack.js          （离线，推荐；本脚本会自动把 build/runtime 塞进去）');
+    console.error('  B) npx electron-builder --win dir --x64 --config electron-builder.yml');
+    console.error('     —— 这一步会去 CDN 拉工具集，没网时只会解一半，最后 Win-unpacked 是残的。\n');
     process.exit(1);
   }
   const work = path.join(OUT_DIR, '.stage');
   fs.rmSync(work, { recursive: true, force: true });
   const appDir = path.join(work, 'app');
   fs.mkdirSync(appDir, { recursive: true });
-  console.log('复制应用载荷…');
+  console.log(`复制应用载荷（来源 ${appSrc}）…`);
   fs.cpSync(appSrc, appDir, { recursive: true });
   // 这些是 Electron/electron-builder 的中间产物，不该进包
-  for (const junk of ['builder-debug.yml', 'builder-effective-config.yaml', '.icon-ico']) {
+  for (const junk of ['builder-debug.yml', 'builder-effective-config.yaml', '.icon-ico', 'VERSION.txt']) {
     fs.rmSync(path.join(appDir, junk), { force: true, recursive: true });
+  }
+  // 便携版不带运行时：把 build/runtime 复制进去（等价于 electron-builder 的 extraResources）
+  if (pick.addRuntime) {
+    console.log(`内置运行时 ${pick.runtime} → app/resources/runtime（约 1 GB，需要一会儿）…`);
+    fs.cpSync(pick.runtime, path.join(appDir, 'resources', 'runtime'), { recursive: true });
+  }
+  const rtExe = path.join(appDir, 'resources', 'runtime', 'emulator', 'emulator.exe');
+  if (!fs.existsSync(rtExe)) {
+    console.error(`\n警告：${rtExe} 不存在 —— 这个包装上之后仍会联网下载运行时。`);
+    console.error('先跑 node build/prepare-runtime.js 生成 build/runtime。\n');
+  } else {
+    console.log('运行时已内置（emulator / platform-tools / system-images）');
   }
   console.log('生成商店图标…');
   const made = writeAssets(path.join(work, 'Assets'));

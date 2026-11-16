@@ -27,6 +27,15 @@ function loadBrandIcon(size) {
   } catch (_) { /* 落到程序化图标 */ }
   return nativeImage.createFromBuffer(drawAppIcon(size || 256));
 }
+
+// 托盘用「小尺寸简化标」：把 512 主标缩到 16px 会糊成一团，纹理和文字都没了
+function loadTrayIcon() {
+  try {
+    const p = path.join(LOGO_DIR, 'tray-16.png');
+    if (fs.existsSync(p)) return nativeImage.createFromPath(p);
+  } catch (_) { /* 回退到程序化图标 */ }
+  return nativeImage.createFromBuffer(drawAppIcon(16));
+}
 const assoc = require('./core/assoc');
 const windowctl = require('./core/windowctl');
 const display = require('./core/display');
@@ -97,6 +106,16 @@ process.on('unhandledRejection', (e) => appLog(`REJECT ${e && (e.stack || e.mess
  * 首次启动（settings.json 尚不存在）时直接把 runtime.dir 指向它并开启兼容模式，
  * 用户无需任何下载与设置，开箱即用。之后用户仍可在设置里改回在线版。
  */
+/**
+ * 随安装包带来的运行时目录（完整版 exe 旁边的 runtime/、微软商店 MSIX 的
+ * app\resources\runtime）。非空 = 模拟器和镜像都是本地的：开机动画不该提
+ * 「下载」，autoDeploy 也不该联网。
+ *
+ * 必须在 bootstrapBundledRuntime() 之前声明：那个函数在模块加载时立刻执行，
+ * 用 `let` 声明在它后面会撞上 TDZ（赋值直接抛错，被 catch 吞掉，标志永远为空）。
+ */
+let bundledRuntimeDir = null;
+
 function bootstrapBundledRuntime() {
   try {
     const exeDir = path.dirname(process.execPath);
@@ -160,6 +179,8 @@ function bootstrapBundledRuntime() {
     }
     // 已有可用运行时（含在线版）就尊重它：AVD 用户数据就在该目录下，不能悄悄搬走
     if (currentOk) {
+      // 运行时就在 EXE 目录树里 = 它是安装包自带的（完整版 / 商店版）
+      bundledRuntimeDir = current;
       // 但仍把自动参数打开，旧配置里的硬编码 4G/4核/弃用 GPU 模式不能继续用
       if (s.engine.gpuMode === 'swiftshader_indirect' || s.engine.memoryMB === 4096) {
         store.saveSettings({ engine: { gpuMode: 'auto', autoMemory: true, memoryMB: 0, cores: 0 } });
@@ -180,6 +201,7 @@ function bootstrapBundledRuntime() {
       runtime: { dir: bundled, compatImage: playBundled },
       engine: { gpuMode: 'auto', autoMemory: true },
     });
+    bundledRuntimeDir = bundled;
   } catch (_) { /* 接管失败不阻塞启动，走在线引导 */ }
 }
 bootstrapBundledRuntime();
@@ -536,6 +558,18 @@ async function autoDeploy({ force = false } = {}) {
   try {
     const env = await runtime.provisioner.checkEnv();
     const needEngine = !env.emulator.ok || !env.sysimg.ok;
+    // 随包自带运行时（完整版安装包 / 微软商店版）：**一律不联网**。
+    // 镜像已经在包里（压缩形态），第一次开机由 engine.ensure() 就地展开；
+    // 这里再下一套 1.5GB 纯属浪费，也正是用户抱怨的「装完还在下镜像」。
+    if (bundledRuntimeDir && env.adb.ok && env.emulator.ok && env.sysimg.ok) {
+      appLog(`autoDeploy 跳过：运行时随包内置（${bundledRuntimeDir}），无需联网`
+        + (env.needsExtract ? '，镜像将在首次启动时本地展开' : ''));
+      return { ok: true, source: 'bundled', needsExtract: !!env.needsExtract };
+    }
+    if (bundledRuntimeDir && !env.emulator.ok) {
+      appLog(`autoDeploy 跳过联网下载：运行时目录随包内置（${bundledRuntimeDir}），交给诊断流程`);
+      return { ok: false, error: 'bundled', bundled: true };
+    }
     // 轻量版优先用「本项目 GitHub 的运行时整包」：一个文件搞定 emulator + 系统镜像，
     // 下载源和更新源统一在 GitHub 上（国内比 dl.google.com 稳得多）。
     // 整包拿不到（没网 / 还没发过该资产 / 被限流）再逐个从官方源装。
@@ -692,7 +726,7 @@ function send(channel, payload) {
 // ---------------- 托盘 ----------------
 
 function buildTray() {
-  const icon = loadBrandIcon(16);
+  const icon = loadTrayIcon();
   try {
     tray = new Tray(icon);
   } catch (_) {
@@ -2130,6 +2164,8 @@ if (!gotLock) {
       // IPC：版本号、首次运行标记、关闭
       ipcMain.handle('splash:version', () => app.getVersion());
       ipcMain.handle('splash:isFirstRun', () => isFirstRun);
+      // 组件是否随包自带：开机动画据此换文案，别对已经内置镜像的用户说「正在下载」
+      ipcMain.handle('splash:bundled', () => !!bundledRuntimeDir);
       ipcMain.on('splash:close', () => {
         if (splashWin && !splashWin.isDestroyed()) splashWin.close();
         splashWin = null;

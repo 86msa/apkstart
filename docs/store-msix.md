@@ -31,34 +31,44 @@ API 返回的仍是重定向前的真路径。我们从数据目录里 spawn `em
 
 ## 2. 怎么打这个包
 
-### 2.1 两条路，选一条
+### 2.1 三条路，选一条
 
-**A. 一条命令（推荐先试这条）**
+**A. 完全离线（推荐，最稳）**
+
+```powershell
+node build/pack.js      # 产出 dist/ApkStart-win64-portable（壳，约 228 MB）
+node build/msix.js      # 自动把 build/runtime 复制进包，再打 MSIX
+```
+
+`build/msix.js` 会优先用 `dist/ApkStart-win64-portable` 当载荷（不需要联网），
+自己把 `build/runtime` 复制到 `app\resources\runtime` —— 等价于 electron-builder 的
+`extraResources`，但不会去 CDN 拉工具集。如果 `build/runtime` 不存在，先跑
+`node build/prepare-runtime.js`（或 `npm run runtime`）。
+
+**B. 一条命令（走 electron-builder）**
 
 ```powershell
 npm run build:appx
 ```
 
-它会跑 `electron-builder --win appx --x64`，产出 `dist/release/ApkStart-<版本>.appx`。
-electron-builder 会自己从它的 CDN 下载一套 Windows SDK 工具（`makeappx.exe` /
-`signtool.exe`），**不需要你本机装 Windows SDK**。
+它会跑 `electron-builder --win appx --x64 --config electron-builder.yml`，产出
+`dist/release/ApkStart-<版本>.appx`。⚠️ 这一步会从 CDN 下载 electron-builder 自己的
+工具集，**断网或网络不稳时会只解一半**（`win-unpacked` 里只剩 `electron.exe`，
+`resources/runtime` 没复制），后续打出来的包会缺运行时。遇到这种情况回到 A。
 
-**B. 自己组包（可控性更好，也是 `build/msix.js` 干的事）**
+**C. 自己组包(可控性最好)**
 
 ```powershell
-# 1) 先产出一个「解包目录」——注意只有 dir/appx 目标会把 build/runtime 放进
-#    resources/runtime，手拼的 dist/ApkStart-win64-portable 是**没有**运行时的
-npx electron-builder --win dir --x64
+npx electron-builder --win dir --x64 --config electron-builder.yml
+node build/msix.js --payload dist/release/win-unpacked
 
-# 2) 组 stage + 生成图标 + 写清单 + 调 makeappx
-node build/msix.js
-
-# 3) 想本地装一下试试，加 --sign（会生成自签证书并签名）
+# 想本地装一下试试，加 --sign（会生成自签证书并签名）
 node build/msix.js --sign
 ```
 
 产物在 `dist/store/ApkStart_<四段版本>_x64.msix`，脚本最后会用 ZipFile 自检包内是否
-有 `AppxManifest.xml` / `AppxBlockMap.xml` / `[Content_Types].xml`（这三个缺一个都装不上）。
+有 `AppxManifest.xml` / `AppxBlockMap.xml` / `[Content_Types].xml`（这三个缺一个都装不上），
+并打印「运行时已内置」确认。
 
 ### 2.2 需要本机装什么
 
@@ -133,9 +143,17 @@ Add-AppxPackage -Path 'dist\store\ApkStart_0.5.0.0_x64.msix'
 
 ## 5. 已知限制（写进 listing，别让用户自己踩）
 
-1. **整包更新**：MSIX 没有差分下载，每次发版用户都要重下 ~1.3 GB。
+0. **装完不会再联网下载任何东西**。模拟器、platform-tools、系统镜像全在包里；
+   唯一的一次性动作是「把包内的 `system.img.xz` 就地展开」到
+   `%USERPROFILE%\ApkStart\data\system-images`（约 1 分钟、约 3.3 GB，纯本地解压）。
+   第一次开机动画会写明「运行时组件已随安装包内置，不再下载任何东西」。
+   代码约束：`provision.systemImageInfo()` / `playImageInfo()` 把**压缩镜像也算就位**，
+   `main.js` 的 `autoDeploy()` 在内置运行时下直接跳过联网（见 `bundledRuntimeDir`）。
+1. **整包更新**：MSIX 没有差分下载，每次发版用户都要重下 ~852 MB。
 2. **首次启动要展开镜像**：包里的 `system.img.xz`（472 MB）要展开成 ~3.3 GB，约 1 分钟。
    展开目标是 `%USERPROFILE%\ApkStart\data\system-images`，不在只读的包目录里。
+   想要「装完 0 等待」可以改成随包分发已展开的镜像，代价是安装包从 852 MB 涨到约 4.4 GB
+   （`build/msix.js` 目前按「小下载 + 一次本地展开」取舍）。
 3. **只有 WHPX 能用**：商店版装不了 AEHD 内核驱动。用户需要在「启用或关闭 Windows 功能」
    里勾上「虚拟机平台」，否则会掉到 TCG 软件模拟（极慢）。
 4. **不能自更新**：更新由 Store 负责（设置 → 应用 → 更新）。

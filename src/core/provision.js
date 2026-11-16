@@ -440,9 +440,13 @@ class Provisioner {
 
     // 完整版（内置运行时）只带一份 API 34 Google Play 镜像，它同时是主镜像与兼容镜像；
     // 不再依赖 compatImage 开关，避免「镜像明明在，却因为没勾开关而判定未部署」
-    const compatReady = this.playImageInfo().ok;
+    const playImage = this.playImageInfo();
+    const compatReady = playImage.ok;
     const emulatorReady = emulator.ok && (sysimg.ok || compatReady);
     const qemuReady = qemu.ok && diskSize > MIN_SIZE.disk;
+    // 包内带来的是 .xz/.gz：镜像「在」，只是还没展开。上层据此判断
+    // 「要不要联网下载」—— 有镜像就绝不下载，只展开。
+    const needsExtract = !!(sysimg.compressed || (compatReady && playImage.compressed));
 
     return {
       adb: { ...adb, required: true },
@@ -450,14 +454,19 @@ class Provisioner {
       sysimg: {
         ok: sysimg.ok || compatReady,
         dir: sysimg.dir,
-        size: sysimg.ok ? sysimg.size : (compatReady ? this.playImageInfo().size : 0),
+        size: sysimg.ok ? sysimg.size : (compatReady ? playImage.size : 0),
         api: sysimg.ok ? sysimg.api : (compatReady ? PLAY_SYSIMG.api : sysimg.api),
+        compressed: needsExtract,
         required: false,
         note: sysimg.ok
-          ? `Android ${sysimg.api}（${(sysimg.size / 1073741824).toFixed(2)} GB）`
-          : (compatReady ? `Android ${PLAY_SYSIMG.api}（ARM 兼容镜像）` : (sysimg.note || '未下载')),
+          ? `Android ${sysimg.api}（${(sysimg.size / 1073741824).toFixed(2)} GB${sysimg.compressed ? '，包内压缩版，首次启动自动展开' : ''}）`
+          : (compatReady
+            ? `Android ${PLAY_SYSIMG.api}（${playImage.compressed ? '包内压缩版，首次启动自动展开' : 'ARM 兼容镜像'}）`
+            : (sysimg.note || '未下载')),
       },
-      playImage: this.playImageInfo(),
+      // true = 镜像就在本地（包内），只需展开一次；上层据此**禁止**任何联网下载
+      needsExtract,
+      playImage,
       accel,
       qemu: { ...qemu, required: false },
       iso: {
@@ -882,7 +891,18 @@ class Provisioner {
     return done;
   }
 
-  /** 系统镜像是否完整（system.img 是硬指标，缺失或过小都视为没下完） */
+  /**
+   * 系统镜像是否完整。
+   *
+   * 「完整」有两种形态：
+   *   1. 已展开的 `system.img`（本地缓存 / 用户在设置里指定的运行时目录）；
+   *   2. **包内带来的 `system.img.xz` / `.gz`** —— 商店（MSIX）版和完整版安装包
+   *      都是这种形态，首次开机时由 materializeImages() 就地展开。
+   *
+   * 第 2 种必须算 ok，否则 checkEnv().ready 会是 false，autoDeploy 就会以为
+   * 「用户还没下镜像」，去网上拉一套 1.5GB 的 —— 这正是「明明装完带了镜像，
+   * 结果还在下载」的根因。返回值里的 compressed 标记表示「还需要展开一次」。
+   */
   systemImageInfo() {
     const p = this.paths();
     const roots = [p.sysImgRoot, path.join(this.root, 'system-images'), path.join(this.appRoot, 'engine', 'system-images')];
@@ -908,21 +928,34 @@ class Provisioner {
       }
     }
     let missing = null;
+    let packed = null;   // 只找到压缩包：还算「有」，但要展开
     for (const dir of candidates) {
-      const system = path.join(dir, 'system.img');
       const kernel = path.join(dir, 'kernel-ranchu');
-      const size = fileSize(system);
       const m = /system-images[\\/]android-(\d+)[\\/]([^\\/]+)[\\/]([^\\/]+)$/.exec(dir);
       const api = m ? Number(m[1]) : DEFAULT_SYSIMG.api;
       const tag = m ? m[2] : DEFAULT_SYSIMG.tag;
       const abi = m ? m[3] : DEFAULT_SYSIMG.abi;
+      // 已展开的优先
+      const size = fileSize(path.join(dir, 'system.img'));
       if (size > MIN_SIZE.sysimg && fs.existsSync(kernel)) {
-        return { ok: true, dir, size, api, tag, abi };
+        return { ok: true, dir, size, api, tag, abi, compressed: false };
+      }
+      // 再认压缩包（包内镜像的常态）
+      if (fs.existsSync(kernel)) {
+        for (const name of ['system.img.xz', 'system.img.gz']) {
+          const cs = fileSize(path.join(dir, name));
+          if (cs > MIN_SIZE.sysimg) {
+            if (!packed) packed = { ok: true, dir, size: cs, api, tag, abi, compressed: true, file: name };
+            break;
+          }
+        }
       }
       if (!missing && fs.existsSync(dir)) {
         missing = { ok: false, dir, size, api, tag, abi, note: size ? '镜像不完整' : '缺少 system.img' };
       }
     }
+    // 有压缩包就用它：需要展开，但**不缺镜像**，绝对不该触发联网下载
+    if (packed) return packed;
     if (missing) return missing;
     return { ok: false, dir: p.sysImgDir, size: 0, api: DEFAULT_SYSIMG.api, tag: DEFAULT_SYSIMG.tag, note: '未下载' };
   }
@@ -1060,12 +1093,31 @@ class Provisioner {
   /** ARM 兼容镜像（Google Play 版）是否已就位 */
   playImageInfo() {
     const p = this.paths();
-    const dir = path.join(p.sysImgRoot, `android-${PLAY_SYSIMG.api}`, PLAY_SYSIMG.tag, PLAY_SYSIMG.abi);
-    const size = fileSize(path.join(dir, 'system.img'));
-    if (size > MIN_SIZE.sysimg && fs.existsSync(path.join(dir, 'kernel-ranchu'))) {
-      return { ok: true, dir, size, api: PLAY_SYSIMG.api, tag: PLAY_SYSIMG.tag };
+    const rel = `android-${PLAY_SYSIMG.api}/${PLAY_SYSIMG.tag}/${PLAY_SYSIMG.abi}`;
+    // 两个位置都看：展开目标（可写的数据目录）与包内原始位置。
+    // 商店/完整版安装包里带的是 system.img.xz，第一次开机才展开 —— 这里必须
+    // 认它，否则 installSystemImage / autoDeploy 会去网上重下一套。
+    const dirs = [path.join(p.sysImgRoot, rel), path.join(this.root, 'system-images', rel)];
+    let packed = null;
+    for (const dir of dirs) {
+      if (!fs.existsSync(path.join(dir, 'kernel-ranchu'))) continue;
+      const size = fileSize(path.join(dir, 'system.img'));
+      if (size > MIN_SIZE.sysimg) {
+        return { ok: true, dir, size, api: PLAY_SYSIMG.api, tag: PLAY_SYSIMG.tag, compressed: false };
+      }
+      if (!packed) {
+        for (const name of ['system.img.xz', 'system.img.gz']) {
+          const cs = fileSize(path.join(dir, name));
+          if (cs > MIN_SIZE.sysimg) {
+            packed = { ok: true, dir, size: cs, api: PLAY_SYSIMG.api, tag: PLAY_SYSIMG.tag, compressed: true, file: name };
+            break;
+          }
+        }
+      }
     }
-    return { ok: false, dir, size, note: size ? '镜像不完整' : '未下载' };
+    if (packed) return packed;
+    const size = fileSize(path.join(dirs[0], 'system.img'));
+    return { ok: false, dir: dirs[0], size, note: size ? '镜像不完整' : '未下载' };
   }
 
   /** 解析 Google Play 版镜像地址（<url> 相对索引文件所在目录） */
