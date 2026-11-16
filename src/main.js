@@ -652,8 +652,8 @@ function enableWindowsFeature(feature) {
 
 function createWindow({ show = true } = {}) {
   mainWindow = new BrowserWindow({
-    width: 1140,
-    height: 740,
+    width: Number(process.env.APKSTART_WIN_W) || 1140,
+    height: Number(process.env.APKSTART_WIN_H) || 740,
     minWidth: 900,
     minHeight: 560,
     show: false,
