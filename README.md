@@ -243,6 +243,19 @@ Android 版本、freeform 支持、共享目录双向同步，加 `--apk 某应�
 |:---:|
 | ![红果短剧在 ApkStart 兼容模式运行](docs/images/compat-hongguo-playing.png) |
 
+### 为什么我的 `adb devices` 看不到这台安卓设备
+
+ApkStart 的 adb 服务跑在**专用端口 5044**，和系统里你自己的 adb（5037）完全隔开 —— 这样你的 Android Studio / scrcpy 不会跟它抢设备，它也不会误杀你手动开的模拟器。
+
+要用命令行连它：
+
+```powershell
+$env:ANDROID_ADB_SERVER_PORT = 5044
+adb devices              # 会看到 emulator-5554
+```
+
+⚠️ **不要**对着 `5555` 端口手动 `adb connect`：Play 版系统镜像会弹「允许 USB 调试吗」的系统对话框，而且它会盖在正在运行的安卓应用上，看起来像是程序出了问题。
+
 ## 关于作者
 
 ApkStart 由 **RoutineMiku** 开发维护。

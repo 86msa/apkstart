@@ -925,7 +925,11 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(/setWindowEmbed/.test(uiHtml), '设置页需要「窗口承载方式」开关');
     assert(/windowEmbed === false/.test(mainJs), 'main 必须能识别独立窗口模式');
     assert(/openDetached/.test(appwinJs), 'appwin 需要 openDetached');
-    assert(/detached:\s*displaySettings\(\)\.windowEmbed === false/.test(mainJs), '开窗口时要带上 detached');
+    // 以前是 `detached: displaySettings().windowEmbed === false` 的行内写法，
+    // 现在提到局部变量（因为还要据此决定 showWhileWaiting），两者都认。
+    assert(/detached:\s*displaySettings\(\)\.windowEmbed === false/.test(mainJs)
+      || /const detached = displaySettings\(\)\.windowEmbed === false/.test(mainJs),
+      '开窗口时要带上 detached');
 
     // 独立模式绝不能 SetParent——那正是嵌入问题的根源
     // （只看真正的代码行，注释里提到 SetParent 是在解释为什么不用它）
@@ -2342,10 +2346,12 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
       '独立窗口模式不能 maximize 壳窗口（会凭空显示一个黑窗口）');
     assert(/if \(this\.detachedMode\) this\.agent\.show\(\)/.test(appwin),
       '独立模式下重复点同一个应用要把模拟器窗口抬到前面，而不是显示壳窗口');
-    // ready-to-show 里也不能 show
+    // ready-to-show 里也不能随便 show：只有在 showWhileWaiting（切换应用、没有
+    // 开机动画兜底）时才允许先把这块「正在打开…」的壳显示出来。
     const readyIdx = appwin.indexOf("once('ready-to-show'");
-    assert(readyIdx > 0 && /if \(this\.detachedMode\) return;/.test(appwin.slice(readyIdx, readyIdx + 400)),
-      '独立模式下 ready-to-show 必须直接 return，不显示壳窗口');
+    assert(readyIdx > 0 && /if \(this\.detachedMode && !this\._showWhileWaiting\) return;/
+      .test(appwin.slice(readyIdx, readyIdx + 600)),
+    '独立模式下 ready-to-show 默认必须直接 return');
   });
 
   await test('开机动画：splash 状态必须是模块级，否则永远关不掉', () => {
@@ -2404,6 +2410,105 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(/let rt = await this\.runtime\.ensure\(\{ onLog \}\)/.test(installerJs),
       'rt 必须是 let，否则重启换 client 时会崩');
     assert(/if \(replaced && replaced\.client\) rt = replaced;/.test(installerJs), '要接受新的 rt');
+  });
+
+  await test('切换应用不能留空屏：独立模式下等待期间要显示壳窗口', () => {
+    const root = path.join(__dirname, '..');
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    const appwin = fs.readFileSync(path.join(root, 'src', 'core', 'appwin.js'), 'utf8');
+    // 独立窗口模式（默认）下壳窗口平时不显示；切换应用到另一个方向会重启运行时
+    // 约 40 秒，这期间如果什么都不显示，用户会以为程序崩了。
+    assert(/showWhileWaiting: detached && !splashVisible/.test(mainJs),
+      '独立模式且没有开机动画时，必须 showWhileWaiting');
+    assert(/splashVisible = !!\(splashWin && !splashWin\.isDestroyed\(\)\)/.test(mainJs),
+      '要靠 splash 是否在显示来决定由谁负责告诉用户「正在等」');
+    assert(/const willRestart = land !== !!displaySettings\(\)\.landscape/.test(mainJs),
+      '要能预判「这次会重启」');
+    assert(/if \(this\.detachedMode && !this\._showWhileWaiting\) return;/.test(appwin),
+      'ready-to-show 只在 showWhileWaiting 时才显示壳窗口');
+    assert(/正在为《[\s\S]{0,40}切换到/.test(mainJs), '提示文案要说清为什么慢');
+  });
+
+  await test('标题要在 show 之前设，否则会闪上一个应用的名字', () => {
+    const root = path.join(__dirname, '..');
+    const appwin = fs.readFileSync(path.join(root, 'src', 'core', 'appwin.js'), 'utf8');
+    const start = appwin.indexOf('async openDetached(');
+    const body = appwin.slice(start, start + 2000);
+    const titleIdx = body.indexOf('this.agent.setTitle(');
+    const showIdx = body.indexOf('this.agent.show()');
+    assert(titleIdx > 0 && showIdx > 0, '两个调用都要在 openDetached 里');
+    assert(titleIdx < showIdx, 'setTitle 必须在 show 之前（代理缓存着上次的标题）');
+  });
+
+  await test('网络体检不能一次不过就叫人重置数据', () => {
+    const root = path.join(__dirname, '..');
+    const emuJs = fs.readFileSync(path.join(root, 'src', 'core', 'emulator.js'), 'utf8');
+    // Wi-Fi 关联比 sys.boot_completed 晚 5~20 秒，查一次就报「没有网络」等于每次
+    // 冷启动都误报；而以前的补救建议是「重置安卓数据」（会删掉已装应用）。
+    assert(/checkNetwork\('', \{ waitMs: \d+, interval: \d+ \}\)/.test(emuJs),
+      '开机后的网络体检要给等待窗口，不能查一次就下结论');
+    const boot = emuJs.slice(emuJs.indexOf('运行时就绪'));
+    const warn = boot.slice(0, 4000);
+    // 只看代码行：上面解释「以前这里建议重置数据」的注释不算
+    const warnCode = warn.split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+    assert(!/重置安卓数据/.test(warnCode), '这条提示不能建议「重置安卓数据」（会丢已装应用）');
+    assert(/暂时没连上网/.test(warnCode), '要改成不吓人、不误导的说法');
+  });
+
+  await test('开机时那个控制台黑窗要用高频通道压掉', () => {
+    const root = path.join(__dirname, '..');
+    const ps1 = fs.readFileSync(path.join(root, 'src', 'core', 'win', 'agent.ps1'), 'utf8');
+    // emulator 拉起 qemu 时 Windows 会新建一个控制台窗口（Win11 上是 Windows Terminal），
+    // 只活 200~300ms；主巡检 250ms 一轮会漏。
+    assert(/_consoleSweep/.test(ps1), '要有独立的控制台扫描时间戳');
+    assert(/now - _consoleSweep > \(_perfMode \? 200 : 100\)/.test(ps1), '前 15 秒要 100ms 一轮扫控制台');
+    assert(/now - _bootHideStart < 15000/.test(ps1), '高频通道只在开机窗口内跑，避免长期烧 CPU');
+    // 必须是「控制台类窗口 + 标题命中运行时路径」，不能退回按 pid 白名单
+    assert(/static void HideConsoleWindows\(\)/.test(ps1) && /IsOurConsole\(h\)/.test(ps1),
+      '控制台归属要靠 IsOurConsole（conhost 的 pid 不是 emulator 的）');
+  });
+
+  await test('重启换面板后不能「复用」一台已经关掉的模拟器', () => {
+    const root = path.join(__dirname, '..');
+    const emuJs = fs.readFileSync(path.join(root, 'src', 'core', 'emulator.js'), 'utf8');
+    // emulator.exe 只是启动器，spawn 完 qemu 自己就退出了，但 this.proc 会一直留着
+    // （killed 仍是 false）。只看它 = 把已经关掉的机器当成还活着：
+    // restartForOrientation 关掉机器后紧接着 ensure() → start() 直接 reused，
+    // 调用方拿着死掉的 serial 去 adb → `device not found`，切换应用直接失败。
+    const reuse = emuJs.slice(emuJs.indexOf('async start('), emuJs.indexOf('async start(') + 900);
+    assert(/_consoleAlive\(\)/.test(reuse), 'start() 的复用分支必须再确认控制台端口上真有机器');
+    assert(/this\.proc = null;/.test(reuse), '确认没在跑就把 proc 清掉，走真正的开机流程');
+    // stop() 关干净后必须丢掉启动器句柄，否则 running() 永远为 true
+    const stopFn = emuJs.slice(emuJs.indexOf('async stop('), emuJs.indexOf('async stop(') + 1800);
+    assert(/killAttempt\(\)[\s\S]{0,200}this\.proc = null;/.test(stopFn), 'stop() 收尾要清掉 this.proc');
+  });
+
+  await test('Windows Terminal 弹出的开机黑框也要能认出来', () => {
+    const root = path.join(__dirname, '..');
+    const ps1 = fs.readFileSync(path.join(root, 'src', 'core', 'win', 'agent.ps1'), 'utf8');
+    // Win11 把默认控制台宿主换成 Windows Terminal 后，qemu 的控制台窗口属于
+    // WindowsTerminal.exe：pid/父进程链/标题全都不是我们的，只能靠「开机前不存在」
+    assert(/static void SnapshotConsoles\(\)/.test(ps1), '开机前要记下已有控制台窗口');
+    assert(/_consolesBeforeBoot/.test(ps1), '要有开机前的控制台快照');
+    assert(/now - _bootHideStart < 20000[\s\S]{0,120}_consolesBeforeBoot\.Contains/.test(ps1),
+      '只认「开机后 20 秒内新出现的」控制台窗口');
+    assert(/tl\.IndexOf\("terminal", StringComparison\.Ordinal\) >= 0/.test(ps1),
+      '标题是空或带 terminal 才算可疑（用户已开的终端在快照里）');
+    assert(/SnapshotConsoles\(\);/.test(ps1), 'boothide 时要先拍快照');
+  });
+
+  await test('启动要串行化：连点/切换应用不能并发跑两遍', () => {
+    const root = path.join(__dirname, '..');
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    // 一次启动最长 80 秒（换面板重启 + 冷启动）。以前这期间再点一个应用会真的
+    // 并发跑第二遍：openAppWindow 把正在启动的应用关掉，虚拟机又在重启，
+    // 两边一起失败，日志里是 `cmd: Can't find service: activity`。
+    assert(/let launchInFlight = null;/.test(mainJs), '要有进行中启动的记录');
+    assert(/if \(launchInFlight\.pkg === pkg\)[\s\S]{0,120}return launchInFlight\.promise;/.test(mainJs),
+      '同一个应用连点要复用进行中的那次');
+    assert(/launch queued \$\{pkg\}/.test(mainJs), '换应用要排队而不是把运行时抽走');
+    assert(/async function launchOne\(pkg\)/.test(mainJs), '原主体要拆成 launchOne');
+    assert(/launchInFlight = entry;/.test(mainJs), '要在 finally 里清空，避免卡死后续启动');
   });
 
   console.log(results.join('\n'));

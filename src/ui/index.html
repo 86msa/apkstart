@@ -185,7 +185,12 @@
         <div class="field">
           <label>本机自适应参数</label>
           <div class="inline-note" id="autoProfileText">正在检测…</div>
-          <span class="sub">内存、核心数、渲染后端、端口、加速方式全部自动选择；启动失败会自动降级重试，不需要手动改。</span>
+          <span class="sub">内存、核心数、渲染后端、端口、加速方式全部自动选择；启动失败会自动降级重试，不需要手动改。
+            ApkStart 用<b>专用 adb 服务端口 5044</b>（你系统里自己的 adb 是 5037），所以命令行里
+            <code>adb devices</code> 看不到这台安卓设备 —— 这是刻意的隔离。想连的话用
+            <code>$env:ANDROID_ADB_SERVER_PORT=5044</code> 再执行 adb。
+            注意：别对着 5555 端口手动 <code>adb connect</code>，那会在正在运行的应用上弹出
+            「允许 USB 调试吗」的系统弹窗。</span>
         </div>
         <div class="field">
           <label>磁盘总占用（运行时 + 安卓数据 + 缓存）</label>

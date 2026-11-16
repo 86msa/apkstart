@@ -491,9 +491,18 @@ async function openAppWindow(pkg, tip) {
   const rec = store.getApp(pkg);
   const land = wantLandscapeFor(pkg);
   const p0 = portraitSize();
+  const detached = displaySettings().windowEmbed === false;
+  // 面板方向和应用方向不一致 → beforeStart 会重启一次运行时（约 40 秒）。
+  const willRestart = land !== !!displaySettings().landscape;
+  // 独立窗口模式下壳窗口平时不显示，但**等待期间**必须给用户一个可见的交代：
+  //   - 有开机动画（首次启动）时由动画负责；
+  //   - 没有动画（切换应用）时必须把壳窗口显示出来，否则桌面上 40 秒什么都没有，
+  //     用户会以为程序崩了。
+  const splashVisible = !!(splashWin && !splashWin.isDestroyed());
+  const label = (rec && rec.label) || pkg;
   appWin.open({
     pkg,
-    label: (rec && rec.label) || pkg,
+    label,
     iconPath: rec && rec.icoPath,
     // 横屏时窗口按横比例开，否则竖窗口里塞横画面会留出大片黑边
     portrait: land ? { w: p0.h, h: p0.w } : p0,
@@ -501,12 +510,16 @@ async function openAppWindow(pkg, tip) {
     // 后者以前是个死开关（只在默认设置里声明，没有任何代码读它），这里补上。
     fullscreen: displaySettings().mode === 'fullscreen'
       || displaySettings().autoFullscreenOnLaunch === true,
-    detached: displaySettings().windowEmbed === false,
+    detached,
+    showWhileWaiting: detached && !splashVisible,
   });
   appWin.setIcon(rec && rec.icoPath);
   // 打开时按已保存的方向初始化（物理面板方向在 doctor.lcdFor 里决定）
   appWin.setState({
-    tip: tip || '正在启动安卓运行时…',
+    // 需要重启换面板时，直接把「为什么慢」写在提示里，别让用户对着 40 秒空屏猜
+    tip: willRestart
+      ? `正在为《${String(label).slice(0, 20)}》切换到${land ? '横屏' : '竖屏'}（重启安卓环境，约 40 秒，只需一次）…`
+      : (tip || '正在启动安卓运行时…'),
     ready: false,
     landscape: land,
   });
@@ -900,7 +913,38 @@ async function runUpdate() {
   }
 }
 
+/**
+ * 启动串行化。
+ *
+ * 一次启动最长要 80 秒（换面板重启 + 冷启动）。这期间用户完全可能再点一个应用、
+ * 或者双击同一个图标两次、或者托盘菜单里点一下 —— 以前这些都会真的并发跑第二遍：
+ * openAppWindow 会把正在启动的那个应用关掉（close + endApp），而虚拟机正在重启，
+ * 结果两边一起失败，日志里是 `cmd: Can't find service: activity` / `device not found`，
+ * 用户看到的是「点了没反应，然后弹回主界面」。
+ *
+ * 现在：同一个应用 → 直接复用进行中的那次（连点等于一次）；换应用 → 等前一次
+ * 收尾再开始，而不是把它的运行时抽走。
+ */
+let launchInFlight = null;
+
 async function runLaunch(pkg) {
+  if (launchInFlight) {
+    if (launchInFlight.pkg === pkg) {
+      appLog(`launch reused in-flight ${pkg}`);
+      return launchInFlight.promise;
+    }
+    appLog(`launch queued ${pkg}（等待 ${launchInFlight.pkg} 启动完成）`);
+    await launchInFlight.promise.catch(() => {});
+  }
+  const entry = { pkg };
+  entry.promise = launchOne(pkg).finally(() => {
+    if (launchInFlight === entry) launchInFlight = null;
+  });
+  launchInFlight = entry;
+  return entry.promise;
+}
+
+async function launchOne(pkg) {
   const t0 = Date.now();
   const mark = (s) => appLog(`launch ${pkg} ${s} +${Date.now() - t0}ms`);
   // 「提前接画面」的状态：进程一出现就接，但最终成败要等回调回来才知道。
