@@ -88,6 +88,7 @@ async function download(url, dest, opt = {}) {
   fs.mkdirSync(path.dirname(dest), { recursive: true });
 
   let attempt = 0;
+  try {
   for (;;) {
     attempt++;
     const existing = fs.existsSync(dest) ? fs.statSync(dest).size : 0;
@@ -195,6 +196,13 @@ async function download(url, dest, opt = {}) {
     }
   }
   return { file: dest, size: fs.statSync(dest).size };
+  } catch (e) {
+    // openStream 直接 reject（连接被拒 / DNS 失败 / 超时）时不会进入写流那段
+    // try/catch —— 以前这里什么都不清，半截文件留着让下次续传继续失败。
+    // 统一在最外层兜住：任何抛出都先丢弃残余。
+    discardPartial(dest);
+    throw e;
+  }
 }
 
 /**
