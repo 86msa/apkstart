@@ -109,8 +109,14 @@ class AppWindow {
     this.detachedMode = !!detached;
     this._closedCb = o.onClosed || null;
     if (this.isOpen && this.pkg === pkg) {
-      this.win.show();
-      this.win.focus();
+      // 独立窗口模式下壳窗口永远不该露脸（它没有内容，只是一块黑）。
+      // 这时候用户再点一次同一个应用，想要的是「把正在看的窗口拿到前面」，
+      // 交给窗口代理去抬模拟器原生窗口。
+      if (this.detachedMode) this.agent.show().catch(() => {});
+      else {
+        this.win.show();
+        this.win.focus();
+      }
       return this.win;
     }
     this.close({ keepApp: true });
@@ -208,7 +214,10 @@ class AppWindow {
     this.win.on('focus', () => this._syncHook(true));
     this.win.on('blur', () => this._syncHook(false));
 
-    if (fullscreen) this.win.maximize();
+    // 注意：maximize() 会把 show:false 的窗口直接显示出来。
+    // 独立窗口模式下画面在模拟器原生窗口里，这里一 maximize 就会在屏幕正中
+    // 多出一个黑色空壳窗口 —— 用户反馈的「打开应用出现多个窗口」有一半来自这里。
+    if (fullscreen && !this.detachedMode) this.win.maximize();
     return this.win;
   }
 
@@ -475,14 +484,26 @@ class AppWindow {
     if (!this.isOpen) return;
     // 独立窗口模式：画面在模拟器原生窗口里，壳窗口是隐藏的 —— maximize 一个隐藏
     // 窗口没有任何视觉效果（这正是「右上角按钮点了没反应」的原因）。这里改成把
-    // 模拟器窗口铺满工作区 / 还原到默认尺寸。
+    // 模拟器窗口铺满工作区 / 还原到之前的尺寸。
     if (this.detachedMode) {
       const area = this._area();
       if (this._detachedFullscreen) {
-        // 还原：回到按面板比例的居中默认尺寸
+        // 还原：回到全屏前记住的尺寸（如果有的话），否则用默认按比例居中
         this._detachedFullscreen = false;
-        await this.openDetachedLayoutOnly(area);
+        if (this._preFullscreenRect) {
+          await this.agent.layout(this._preFullscreenRect).catch(() => {});
+          this._preFullscreenRect = null;
+        } else {
+          await this.openDetachedLayoutOnly(area);
+        }
       } else {
+        // 全屏前记住当前窗口位置和大小，还原时用
+        try {
+          const probe = await this.agent.probe().catch(() => null);
+          if (probe && probe.w > 0 && probe.h > 0) {
+            this._preFullscreenRect = { x: probe.x, y: probe.y, w: probe.w, h: probe.h };
+          }
+        } catch (_) { /* 拿不到就还原时用默认 */ }
         this._detachedFullscreen = true;
         await this.agent.layout({ x: area.x, y: area.y, w: area.w, h: area.h })
           .catch(() => {});

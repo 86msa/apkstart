@@ -1310,7 +1310,9 @@ public class ApkAgent
                         IntPtr e = FindEmulator();
                         RECT r = new RECT();
                         if (e != IntPtr.Zero) GetWindowRect(e, out r);
-                        Reply(sock, "{\"ok\":true,\"emu\":" + e.ToInt64() + ",\"w\":" + (r.R - r.L) + ",\"h\":" + (r.B - r.T) + "}");
+                        Reply(sock, "{\"ok\":true,\"emu\":" + e.ToInt64()
+                            + ",\"x\":" + r.L + ",\"y\":" + r.T
+                            + ",\"w\":" + (r.R - r.L) + ",\"h\":" + (r.B - r.T) + "}");
                     }
                     else if (cmd == "winready")
                     {

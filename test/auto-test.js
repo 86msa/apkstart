@@ -1025,8 +1025,10 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(/wm set-ignore-orientation-request true/.test(engJs), '丢了要补 ignore-orientation');
     assert(/wm density 190/.test(engJs), '丢了要补 density 190');
     assert(/_healOrientation/.test(engJs.slice(engJs.indexOf('startWatchdog'))), '看门狗要周期自愈');
-    // 应用刚起来 Activity 重建会覆盖方向，需要在那个时机补一次
-    assert(/onAppUp[\s\S]{0,600}_healOrientation/.test(mainJs), '应用起来后要立刻校正一次');
+    // 应用刚起来 Activity 重建会覆盖方向，需要在那个时机补一次。
+    // 窗口放宽到 2200 字符：onAppUp 的 then 回调里还要处理开机动画淡出，
+    // 那些注释会把 _healOrientation 往后推，600 字符的窗口一加东西就误报。
+    assert(/onAppUp[\s\S]{0,2200}_healOrientation/.test(mainJs), '应用起来后要立刻校正一次');
     // 面板方向和设置不一致时不能靠这里修，要交给重启
     assert(/panelLandscape/.test(engJs), '要能区分「该重启」和「该重锁方向」');
   });
@@ -2076,6 +2078,39 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     }
   });
 
+  await test('只读运行时目录（MSIX 包内）：可写数据必须改道用户数据目录', () => {
+    const fs2 = require('fs');
+    const os2 = require('os');
+    const tmp = fs2.mkdtempSync(path.join(os2.tmpdir(), 'ro-root-'));
+    const oldAppData = process.env.APPDATA;
+    process.env.APPDATA = path.join(tmp, 'appdata');
+    try {
+      const store = require('../src/core/store');
+      const { Provisioner } = require('../src/core/provision');
+      // 造一个「不可写」的 root：把中间一级做成普通文件，mkdir 必然 EEXIST/ENOTDIR
+      const blocker = path.join(tmp, 'blocker');
+      fs2.writeFileSync(blocker, 'x');
+      const roRoot = path.join(blocker, 'rt');
+      store.saveSettings({ runtime: { dir: roRoot } });
+      const p = new Provisioner(path.join(__dirname, '..'));
+      const paths = p.paths();
+      assert(paths.rootWritable === false, '只读目录要被识别成不可写');
+      // 关键：镜像必须展开到用户数据目录，而不是包内（包内只读，展开会失败）
+      assert(paths.sysImgRoot === path.join(store.DATA_DIR, 'system-images'),
+        `只读时应落在数据目录，实际 ${paths.sysImgRoot}`);
+      assert(paths.tmp.toLowerCase().startsWith(store.DATA_DIR.toLowerCase()), '_tmp 也要改道');
+      assert(paths.avdHome.toLowerCase().startsWith(store.DATA_DIR.toLowerCase()), 'AVD 也必须在可写目录');
+      // 可执行文件仍然指向包内（这样才有包身份，%APPDATA% 虚拟化视图才和父进程一致）
+      assert(paths.emulatorExe === path.join(roRoot, 'emulator', 'emulator.exe'), 'emulator 仍从包内运行');
+      assert(paths.adbExe === path.join(roRoot, 'platform-tools', 'adb.exe'), 'adb 仍从包内运行');
+      // ensureDirs 不能因为 root 只读就抛错
+      p.ensureDirs();
+    } finally {
+      if (oldAppData === undefined) delete process.env.APPDATA; else process.env.APPDATA = oldAppData;
+      fs2.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   console.log('\n[资源策略 / 磁盘分配 / 日志上限]');
 
   await test('资源策略一处切换，自动翻译成 vCPU/优先级/分辨率', () => {
@@ -2253,6 +2288,79 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(parseResolvedActivity('com.phoenix.read', out)
       === 'com.phoenix.read/com.dragon.read.pages.splash.SplashActivity', '应跳过空行取到最后一行组件');
     assert(parseResolvedActivity('com.other', out) === '', '别的包名不能拿来用');
+  });
+
+  await test('单个应用窗口：独立模式下壳窗口绝不能被显示出来', () => {
+    const root = path.join(__dirname, '..');
+    const appwin = fs.readFileSync(path.join(root, 'src', 'core', 'appwin.js'), 'utf8');
+    // maximize() 会把 show:false 的 BrowserWindow 直接显示出来 —— 这是
+    // 「打开应用出现多个窗口」的直接成因之一。
+    assert(/fullscreen && !this\.detachedMode\) this\.win\.maximize\(\)/.test(appwin),
+      '独立窗口模式不能 maximize 壳窗口（会凭空显示一个黑窗口）');
+    assert(/if \(this\.detachedMode\) this\.agent\.show\(\)/.test(appwin),
+      '独立模式下重复点同一个应用要把模拟器窗口抬到前面，而不是显示壳窗口');
+    // ready-to-show 里也不能 show
+    const readyIdx = appwin.indexOf("once('ready-to-show'");
+    assert(readyIdx > 0 && /if \(this\.detachedMode\) return;/.test(appwin.slice(readyIdx, readyIdx + 400)),
+      '独立模式下 ready-to-show 必须直接 return，不显示壳窗口');
+  });
+
+  await test('开机动画：splash 状态必须是模块级，否则永远关不掉', () => {
+    const root = path.join(__dirname, '..');
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    // runLaunch / autoDeploy 定义在 whenReady 回调**外面**，回调里 const 的
+    // splashDone 它们根本看不到（typeof 恒为 'undefined'）—— 曾经导致
+    // 480x360 的 alwaysOnTop 开机动画一直钉在屏幕中央。
+    assert(/^let splashWin = null;$/m.test(mainJs), 'splashWin 必须是模块级 let');
+    assert(/^let splashDone = \(\) => \{\};$/m.test(mainJs), 'splashDone 必须是模块级 let');
+    assert(/^let splashProgress = \(\) => \{\};$/m.test(mainJs), 'splashProgress 必须是模块级 let');
+    assert(!/const splashDone = \(\) =>/.test(mainJs), '不能再在 whenReady 里用 const 覆盖');
+    // 保险丝：splash 自己没关掉时主进程强关
+    assert(/setTimeout\(\(\) => \{[\s\S]{0,160}splashWin\.close\(\);/.test(mainJs),
+      'splashDone 之后要有一道强关保险丝');
+  });
+
+  await test('多窗口：启动应用要先收起管理窗口再开应用窗口', () => {
+    const root = path.join(__dirname, '..');
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    const launchIdx = mainJs.indexOf('async function runLaunch(');
+    const body = mainJs.slice(launchIdx, launchIdx + 1600);
+    const hideIdx = body.indexOf('mainWindow.hide()');
+    const openIdx = body.indexOf('openAppWindow(pkg');
+    assert(hideIdx > 0 && openIdx > 0, '两个调用都要在 runLaunch 里');
+    assert(hideIdx < openIdx, 'mainWindow.hide() 必须在 openAppWindow 之前（否则会同时看到两个窗口）');
+  });
+
+  await test('横竖屏：面板方向必须跟应用声明一致，否则只会信箱化', () => {
+    const root = path.join(__dirname, '..');
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    const apkJs = fs.readFileSync(path.join(root, 'src', 'core', 'apk.js'), 'utf8');
+    const storeJs = fs.readFileSync(path.join(root, 'src', 'core', 'store.js'), 'utf8');
+    const installerJs = fs.readFileSync(path.join(root, 'src', 'core', 'installer.js'), 'utf8');
+
+    assert(/function wantLandscapeFor\(pkg\)/.test(mainJs), '要有「这个应用该用哪个方向」的判定');
+    assert(/orientationMode/.test(mainJs), '要读设置里的方向策略');
+    assert(/orientationOverride/.test(mainJs), '单应用方向覆盖要生效');
+    // 启动路径要用它，而不是裸的 displaySettings().landscape
+    assert(/const wantLand = wantLandscapeFor\(pkg\)/.test(mainJs), 'beforeStart 要按应用方向判定');
+    assert(/const land = wantLandscapeFor\(pkg\)/.test(mainJs), 'openAppWindow 要按应用方向开窗口');
+    // 离线从 APK 清单算方向
+    assert(/function detectOrientation\(/.test(apkJs), '要从 APK 清单离线判断应用方向');
+    assert(/orientation,/.test(apkJs), 'parseApk 要返回 orientation');
+    assert(/orientation: meta\.orientation/.test(installerJs), '安装时要把方向存进 apps.json');
+    assert(/orientationMode: 'auto'/.test(storeJs), '默认策略是跟随应用');
+    // 老数据回填：不补就还是黑边
+    assert(/orientation backfill/.test(mainJs), '老版本装的应用要回填方向');
+  });
+
+  await test('横竖屏：方向不一致触发的重启不能把启动打断', () => {
+    const root = path.join(__dirname, '..');
+    const installerJs = fs.readFileSync(path.join(root, 'src', 'core', 'installer.js'), 'utf8');
+    // beforeStart 会返回新的 rt，以前这里写的是 const rt，一旦真走重启分支就
+    // 抛 "Assignment to constant variable."，整个启动失败。
+    assert(/let rt = await this\.runtime\.ensure\(\{ onLog \}\)/.test(installerJs),
+      'rt 必须是 let，否则重启换 client 时会崩');
+    assert(/if \(replaced && replaced\.client\) rt = replaced;/.test(installerJs), '要接受新的 rt');
   });
 
   console.log(results.join('\n'));

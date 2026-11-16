@@ -237,12 +237,25 @@
         </div>
         <div class="field">
           <label>屏幕方向</label>
-          <select id="setLandscape">
-            <option value="portrait">竖屏（手机比例，适合刷短视频、看小说）</option>
-            <option value="landscape">横屏（宽屏铺满，适合看剧、玩游戏）</option>
+          <select id="setOrientationMode">
+            <option value="auto">跟随应用（推荐 · 自动选横竖屏，画面铺满不留黑边）</option>
+            <option value="portrait">强制竖屏（手机比例，适合刷短视频、看小说）</option>
+            <option value="landscape">强制横屏（宽屏铺满，适合看剧、玩游戏）</option>
           </select>
-          <span class="sub">横屏要改的是<b>虚拟手机的面板方向</b>，所以下次启动应用时会自动重启一次运行时
-            （约十几秒，只在那一次）。之后再启动都是直接用横屏面板，不再重启。</span>
+          <span class="sub">安卓的横竖屏是<b>虚拟手机面板的真实方向</b>决定的。面板方向和应用自己声明的方向不一致时，
+            安卓只会给应用中间一条窄画面、两侧补黑 —— 换窗口大小、改分辨率都填不满。
+            「跟随应用」会在安装 APK 时读出应用的方向，启动时自动把面板换成一致的那个，
+            所以红果、墨读这类应用会正立且铺满。方向不对时才重启一次运行时（约十几秒），
+            之后再打开同一方向的应用都是秒进。</span>
+        </div>
+        <div class="field">
+          <label>当前面板方向</label>
+          <select id="setLandscape">
+            <option value="portrait">竖屏面板</option>
+            <option value="landscape">横屏面板</option>
+          </select>
+          <span class="sub">这是运行时<b>现在</b>用的物理面板方向，由上面那条策略自动写入。
+            只有在「强制」模式下它才完全由你决定。</span>
         </div>
         <div class="field">
           <label>窗口承载方式</label>

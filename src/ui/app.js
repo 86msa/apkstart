@@ -843,6 +843,7 @@ function fillSettings(s) {
   $('setDisplayMode').value = d.mode === 'fullscreen' ? 'fullscreen' : 'window';
   if ($('setAutoFullscreen')) $('setAutoFullscreen').value = d.autoFullscreenOnLaunch === true ? 'on' : 'off';
   if ($('setLandscape')) $('setLandscape').value = d.landscape === true ? 'landscape' : 'portrait';
+  if ($('setOrientationMode')) $('setOrientationMode').value = d.orientationMode || 'auto';
   $('setPortrait').value = d.portrait || '900x1600';
   if ($('setWindowEmbed')) $('setWindowEmbed').value = d.windowEmbed === false ? 'detached' : 'embed';
   $('portraitField').hidden = $('setDisplayMode').value === 'fullscreen';
@@ -1198,15 +1199,26 @@ function bindSettings() {
       toast({ title: on ? '已开启自动全屏' : '已关闭自动全屏', body: '下次打开应用时生效', type: 'ok' });
     });
   }
+  if ($('setOrientationMode')) {
+    $('setOrientationMode').addEventListener('change', async (e) => {
+      const mode = e.target.value;
+      state.settings = await api.setSettings({ display: { orientationMode: mode } });
+      toast({
+        title: mode === 'auto' ? '已设为跟随应用' : (mode === 'landscape' ? '已强制横屏' : '已强制竖屏'),
+        body: mode === 'auto'
+          ? '下次打开应用时会按应用自己的方向选面板，方向不一致的话会重启一次运行时。'
+          : '下次打开应用时会重启一次运行时把面板切到指定方向，之后不再重启。',
+        type: 'ok',
+      });
+    });
+  }
   if ($('setLandscape')) {
     $('setLandscape').addEventListener('change', async (e) => {
       const landscape = e.target.value === 'landscape';
       state.settings = await api.setSettings({ display: { landscape } });
       toast({
-        title: landscape ? '已设为横屏' : '已设为竖屏',
-        body: landscape
-          ? '下次打开应用时会重启一次运行时来切换物理面板方向（约十几秒），之后就不会再重启。'
-          : '下次打开应用时会把面板切回竖屏。',
+        title: landscape ? '面板已设为横屏' : '面板已设为竖屏',
+        body: '下次打开应用时会重启一次运行时来切换物理面板方向（约十几秒），之后就不会再重启。',
         type: 'ok',
       });
     });

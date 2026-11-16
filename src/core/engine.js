@@ -1320,7 +1320,18 @@ class Runtime {
       if (!ignoreOk || !densityOk) {
         this.log(`横屏状态收敛：ignore-orientation=${ignoreOk} density190=${densityOk} → 补齐`);
         if (!ignoreOk) await c.shell('wm set-ignore-orientation-request true', { timeout: 8000 }).catch(() => {});
-        if (!densityOk) await c.shell('wm density 190', { timeout: 8000 }).catch(() => {});
+        // density 只在**没有应用在前台**时才补。
+        // 改密度会触发配置变更 + Activity 重建，而缓存了 DisplayMetrics 的应用
+        // （墨读）会按旧密度重算一遍 dp，画面缩成左上角一小块、右边全是空白 ——
+        // 用户看到的就是「墨读没有填满窗口」。有应用在跑时留给下一次启动路径，
+        // installer.launch 的 resetDisplayOverrides 会在 am start 之前设好。
+        if (!densityOk) {
+          if (this._activeApps.size === 0) {
+            await c.shell('wm density 190', { timeout: 8000 }).catch(() => {});
+          } else {
+            this.log('density190 缺失但有应用在前台：跳过，等下次启动时设置（避免画面缩水）');
+          }
+        }
       }
     }
   }

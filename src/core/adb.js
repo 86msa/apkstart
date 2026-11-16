@@ -860,7 +860,13 @@ class AdbClient {
   /** 启动时清掉旧版本残留的 wm size / density 覆盖（持久化在 /data，会一直躺倒） */
   async resetDisplayOverrides(landscape = false) {
     try {
-      await this.shell('wm size reset; wm density reset', { timeout: 15000 });
+      // density 必须**在应用启动之前**就设好。
+      // 之前这里无条件 `wm density reset`，然后由 _healOrientation（应用起来
+      // 1.8 秒后 / 每 60 秒巡检）补回 190 —— 那是一次「应用运行中」的配置变更。
+      // 缓存了 DisplayMetrics 的应用（墨读就是）会按旧密度算一遍 dp，画面缩成
+      // 左上角一小块、右边一大片空白，也就是用户说的「墨读没有填满窗口」。
+      // 现在横向时直接在这里连同 size 一起重设，启动路径上不再有中途改密度。
+      await this.shell(`wm size reset; wm density ${landscape ? 190 : 'reset'}`, { timeout: 15000 });
       await this.shell('settings put system accelerometer_rotation 0', { timeout: 15000 });
       // 与 setOrientation 保持一致：面板方向说了算，逻辑方向锁 0。
       await this.shell('wm user-rotation lock 0', { timeout: 15000 });

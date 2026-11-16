@@ -115,6 +115,30 @@ function fileSize(p) {
 }
 
 /**
+ * 目录可写性探测（结果按目录缓存）。
+ *
+ * 为什么不用 fs.accessSync(dir, W_OK)：Windows 上它只看「只读」文件属性、
+ * 不看 ACL，对 C:\Program Files\WindowsApps\...（MSIX 安装目录）会给出错误的
+ * 「可写」结论，然后 .img.xz 展开到一半才失败。这里真的写一个探测文件再删掉。
+ */
+const _dirWritableCache = new Map();
+function provisionDirWritable(dir) {
+  if (_dirWritableCache.has(dir)) return _dirWritableCache.get(dir);
+  let ok = false;
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const probe = path.join(dir, `.apkstart-wtest-${process.pid}-${Date.now()}`);
+    fs.writeFileSync(probe, 'x');
+    fs.rmSync(probe, { force: true });
+    ok = true;
+  } catch (_) {
+    ok = false;
+  }
+  _dirWritableCache.set(dir, ok);
+  return ok;
+}
+
+/**
  * 下载完的完整性检查。不通过就**删掉这个不完整文件**。
  *
  * 以前这里只抛错、不删文件，于是 tmp 里永远留着一个半截 zip。下次进来
@@ -213,6 +237,15 @@ class Provisioner {
     const sysTag = DEFAULT_SYSIMG.tag;
     const sysApi = DEFAULT_SYSIMG.api;
     const sysAbi = DEFAULT_SYSIMG.abi;
+    // 运行时目录可写吗？
+    // 商店（MSIX）版把 emulator / platform-tools / system-images 直接放在安装包
+    // 里（C:\Program Files\WindowsApps\...），该目录是只读的：
+    //   - 就地展开 .img.xz、建 _tmp、建 qemu/ 都会失败；
+    //   - 但可执行文件从包里跑是允许的（而且这样才有包身份，%APPDATA% 虚拟化
+    //     视图才能和父进程一致）。
+    // 所以「能执行」和「可写」要分开：可执行路径继续指向包内，可写的数据
+    // （镜像展开目录 / AVD / 临时目录）全部改到用户数据目录。
+    const rootWritable = provisionDirWritable(root);
     // AVD（含用户数据、已装应用、quickboot 快照）必须落在可写且不会被清理的地方。
     // 单文件发行版的运行时是随包解压到临时目录的，把 AVD 放进去等于每次退出都丢应用。
     // 只要运行时目录不在 %APPDATA% 里，就把 AVD 固定指到用户数据目录。
@@ -235,9 +268,16 @@ class Provisioner {
     //  2) 老用户/单文件发行版把镜像放在用户数据目录 → 用那里的；
     //  3) 全新安装（两处都没有）→ 落在运行时目录，因为用户数据目录可能是被
     //     重定向过的临时目录（CI 组装运行时就是这种情况，写歪会直接校验失败）。
-    const sysRoot = fs.existsSync(rootImg) ? rootImg : (fs.existsSync(dataImg) ? dataImg : rootImg);
+    //  4) 运行时目录只读（MSIX 包内）→ 必须落到用户数据目录，否则 .img.xz 展不开。
+    let sysRoot;
+    if (!rootWritable) sysRoot = dataImg;
+    else if (fs.existsSync(rootImg)) sysRoot = rootImg;
+    else if (fs.existsSync(dataImg)) sysRoot = dataImg;
+    else sysRoot = rootImg;
     return {
       root,
+      // 只有可写时才把临时目录/辅助目录放在 root 下，否则一律改用数据目录
+      writeRoot: rootWritable ? root : path.join(store.DATA_DIR, 'runtime'),
       qemuDir: path.join(root, 'qemu'),
       qemuExe: path.join(root, 'qemu', 'qemu-system-x86_64.exe'),
       qemuImg: path.join(root, 'qemu', 'qemu-img.exe'),
@@ -249,11 +289,12 @@ class Provisioner {
       sysImgRoot: sysRoot,
       sysImgDir: path.join(sysRoot, `android-${sysApi}`, sysTag, sysAbi),
       avdHome: insideData ? path.join(root, 'avd') : writable,
-      aehdDir: path.join(root, 'aehd'),
-      imagesDir: path.join(root, 'images'),
+      aehdDir: path.join(rootWritable ? root : path.join(store.DATA_DIR, 'runtime'), 'aehd'),
+      imagesDir: path.join(rootWritable ? root : path.join(store.DATA_DIR, 'runtime'), 'images'),
       iso: path.join(root, 'images', 'android-x86.iso'),
       disk: path.join(root, 'images', 'android.qcow2'),
-      tmp: path.join(root, '_tmp'),
+      tmp: path.join(rootWritable ? root : path.join(store.DATA_DIR, 'runtime'), '_tmp'),
+      rootWritable,
       sysTag, sysApi, sysAbi,
     };
   }
@@ -261,7 +302,10 @@ class Provisioner {
   ensureDirs() {
     const p = this.paths();
     for (const d of [p.root, p.qemuDir, p.adbDir, p.imagesDir, p.tmp, p.avdHome]) {
-      fs.mkdirSync(d, { recursive: true });
+      // 逐个容错：商店（MSIX）版的 p.root 在只读的安装包里，建不出来也正常，
+      // 可写目录已经全部改道到用户数据目录（见 paths()）。一个建不出来不该
+      // 让整条启动路径抛错。
+      try { fs.mkdirSync(d, { recursive: true }); } catch (_) { /* 只读/被占用都跳过 */ }
     }
     return p;
   }

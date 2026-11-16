@@ -43,7 +43,25 @@
 安装包：
 
 - **`ApkStart-v*-Setup.exe`**（约 1.3 GB）：**一个 EXE 包含全部运行时**（adb / Android Emulator / 系统镜像），装完首次启动自动把镜像展开到用户目录，**之后不再联网下载任何东西**。装到当前用户目录、不要求管理员权限。
+- **微软商店版（MSIX，`ApkStart_<版本>_x64.msix`）**：同样内置完整运行时，一次下载装完即用；安装目录是只读的 WindowsApps，所以自更新交给 Microsoft Store，硬件加速只走 Windows 自带的 WHPX。打包与上架流程见 [docs/store-msix.md](docs/store-msix.md)。
 - 另有轻量版 `ApkStart-v*-win64-portable.zip`（**95 MB**，解压后约 226 MB）：首次启动才在后台下载运行时。运行时的下载源就是**本项目的 GitHub Release**（`ApkStart-runtime-*.zip` 整包），不走 dl.google.com；整包拿不到时才自动退回官方源。
+
+### 画面铺满是怎么做到的
+
+模拟器的**物理面板方向**（`hw.lcd.width/height`）就是画面的真实形状。面板方向和应用自己声明的
+`screenOrientation` 不一致时，Android 只会给应用一个信箱式的中间窄条 —— 两侧补黑，换窗口大小、
+改 `wm size`、改 letterbox 样式都填不满（这套组合逐项试过，见 `src/core/apk.js` 的注释）。
+
+所以 ApkStart 在**安装 APK 时离线解析 `AndroidManifest.xml`**，统计出这个应用天然是横屏还是竖屏
+（启动 Activity 加权；全 `sensor` / `fullSensor` 的会在首次运行后再问安卓要一次实际值），存进
+`apps.json`，启动时按它选面板：
+
+- 红果短剧这类竖屏应用 → 竖屏面板 720×1280，正立、铺满、density 190（sw606dp）同时给出平板排版；
+- 墨读这类横屏应用 → 横屏面板 1280×720，正立、铺满。
+
+只有「面板方向和应用方向不一致」的那一次才重启运行时（约 40 秒，标题栏会给出提示），
+之后同方向的应用都是秒进。标题栏的旋转按钮会把这个应用的方向**记住**（其它应用不受影响），
+设置 → 应用窗口 → 屏幕方向可以改成「强制横屏 / 强制竖屏」。
 
 ### 在线更新（自动选较快的源）
 
