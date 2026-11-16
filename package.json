@@ -53,6 +53,7 @@
     },
     "files": [
       "src/**/*",
+      "assets/**/*",
       "package.json",
       "!src/ui/assets/*.jpg"
     ],

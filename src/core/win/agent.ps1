@@ -41,6 +41,7 @@ public class ApkAgent
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassNameW(IntPtr h, StringBuilder s, int n);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowTextW(IntPtr h, StringBuilder s, int n);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool SetWindowTextW(IntPtr h, string s);
     [DllImport("user32.dll")] static extern IntPtr SetParent(IntPtr c, IntPtr p);
     [DllImport("user32.dll")] static extern IntPtr GetParent(IntPtr c);
     [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h, int i);
@@ -271,6 +272,16 @@ public class ApkAgent
     // 所以这里不能再按 IsWindowVisible 过滤 —— 否则永远找不到可嵌入的窗口，
     // 用户看到的是一个全黑的应用窗口。改为「标题是 Android Emulator 就认，
     // 可见的大窗口优先」。工具栏 / 提示窗（QWindowTool）尺寸太小，被面积阈值挡掉。
+    //
+    // ApkStart 会把这个窗口的标题改成应用名（见 "title" 命令），所以识别时
+    // 必须同时认「改名后的标题」。用一个 volatile 字段记住我们设过的标题。
+    public static string _ourTitle = "";
+    static bool LooksLikeEmulator(string title)
+    {
+        if (title.IndexOf("Android Emulator", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+        if (_ourTitle.Length > 0 && String.Equals(title, _ourTitle, StringComparison.Ordinal)) return true;
+        return false;
+    }
     static IntPtr FindEmulator()
     {
         IntPtr best = IntPtr.Zero;
@@ -286,7 +297,7 @@ public class ApkAgent
             string cls = ClassOf(h);
             if (cls.IndexOf("QWindowIcon", StringComparison.Ordinal) < 0) return true;
             string title = TitleOf(h);
-            bool named = title.IndexOf("Android Emulator", StringComparison.OrdinalIgnoreCase) >= 0;
+            bool named = LooksLikeEmulator(title);
             if (!named && !IsWindowVisible(h)) return true;
             RECT r;
             if (!GetWindowRect(h, out r)) return true;
@@ -491,6 +502,11 @@ public class ApkAgent
         // 也不该按宿主客户区去 Fit。这里直接跳过所有压制逻辑。
         if (_detachedMode)
         {
+            // Qt 在分辨率变化/窗口重建时会把标题改回 "Android Emulator - ..."。
+            // 每轮巡检补设一次，保证任务栏里始终是 ApkStart（或应用名）。
+            if (_ourTitle.Length > 0 && _emu != IntPtr.Zero
+                && !String.Equals(TitleOf(_emu), _ourTitle, StringComparison.Ordinal))
+                SetWindowTextW(_emu, _ourTitle);
             HideConsoleWindows();
             HideStrayWindows();
             return;
@@ -1199,6 +1215,18 @@ public class ApkAgent
                         if (_emu == IntPtr.Zero) _emu = FindEmulator();
                         Detach();
                         Reply(sock, "{\"ok\":true,\"emu\":" + _emu.ToInt64() + "}");
+                    }
+                    else if (cmd == "title")
+                    {
+                        // 把模拟器原生窗口的标题从 "Android Emulator - apkstart:5554"
+                        // 换成用户看得懂的名字（默认 "ApkStart"）。Qt 会在窗口重建时
+                        // 把标题改回去，所以 QuietSweep 每轮巡检都会补设一次（见下）。
+                        string t = S(line, "text");
+                        if (t.Length == 0) t = "ApkStart";
+                        _ourTitle = t;
+                        if (_emu == IntPtr.Zero) _emu = FindEmulator();
+                        bool ok = _emu != IntPtr.Zero && SetWindowTextW(_emu, t);
+                        Reply(sock, "{\"ok\":" + (ok ? "true" : "false") + "}");
                     }
                     else if (cmd == "layout")
                     {

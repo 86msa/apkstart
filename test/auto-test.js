@@ -861,6 +861,76 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(order[0] === expectFirst, `auto 模式第一应该是 ${expectFirst}，实际是 ${order[0]}`);
   });
 
+  await test('窗口标题改 ApkStart：识别逻辑必须同时认新标题', () => {
+    const root = path.join(__dirname, '..');
+    const ps1 = fs.readFileSync(path.join(root, 'src', 'core', 'win', 'agent.ps1'), 'utf8');
+    const agent = fs.readFileSync(path.join(root, 'src', 'core', 'agent.js'), 'utf8');
+    const appwin = fs.readFileSync(path.join(root, 'src', 'core', 'appwin.js'), 'utf8');
+
+    assert(/SetWindowTextW/.test(ps1), 'agent.ps1 需要 SetWindowTextW 声明');
+    assert(/cmd == "title"/.test(ps1), 'agent.ps1 需要 title 命令');
+    assert(/LooksLikeEmulator/.test(ps1), '改完标题后还要能认出这个窗口，不能只认 Android Emulator');
+    assert(/_ourTitle/.test(ps1), '要记住设过的标题');
+    // Qt 会在窗口重建时把标题改回去，巡检里必须补设
+    assert(/QuietSweep[\s\S]{0,600}SetWindowTextW/.test(ps1), '巡检里要补设标题');
+    assert(/setTitle\(/.test(agent), 'agent.js 要暴露 setTitle');
+    assert(/agent\.setTitle\(/.test(appwin), '独立窗口打开时要真的改标题');
+  });
+
+  await test('中文环境：开机注入 locale、静默装拼音输入法、captive portal 国内端点', () => {
+    const root = path.join(__dirname, '..');
+    const emuJs = fs.readFileSync(path.join(root, 'src', 'core', 'emulator.js'), 'utf8');
+    const adbJs = fs.readFileSync(path.join(root, 'src', 'core', 'adb.js'), 'utf8');
+    const engJs = fs.readFileSync(path.join(root, 'src', 'core', 'engine.js'), 'utf8');
+    const storeJs = fs.readFileSync(path.join(root, 'src', 'core', 'store.js'), 'utf8');
+    const html = fs.readFileSync(path.join(root, 'src', 'ui', 'index.html'), 'utf8');
+
+    // locale 用官方 -change-locale：实测 -prop persist.sys.locale 会被模拟器
+    // 拦截、guest 里 getprop 一个都看不到，只有 -change-locale 会真正改系统语言
+    assert(/'\-change-locale',\s*locale/.test(emuJs), '必须用 -change-locale 设系统语言');
+    // 只看代码行：注释里解释「为什么不用 -prop」时提到它不算
+    const emuCode = emuJs.split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+    assert(!/-prop[\s\S]{0,80}persist\.sys\.locale/.test(emuCode),
+      '不能再用无效的 -prop persist.sys.locale');
+    assert(/_guestLocale/.test(emuJs), '要有可配置的语言来源');
+    // 默认中文
+    assert(/locale:\s*'zh-CN'/.test(storeJs), '默认语言必须是简体中文');
+    assert(/chineseIme:\s*true/.test(storeJs), '默认开启中文输入法');
+
+    // 输入法：随包带 APK、开机装好并启用
+    assert(fs.existsSync(path.join(root, 'assets', 'PinyinIME.apk')), '缺少 PinyinIME.apk');
+    assert(/ensureChineseIme/.test(adbJs), 'adb 需要 ensureChineseIme');
+    assert(/com\.android\.inputmethod\.pinyin/.test(adbJs), '要用谷歌拼音输入法');
+    assert(/ime enable/.test(adbJs) && /default_input_method/.test(adbJs), '要启用并设为默认');
+    assert(/ensureChineseIme/.test(engJs), 'prepare() 里要真正调用安装');
+    assert(/_chineseReady/.test(engJs), '中文初始化要幂等（每次开机只做一次）');
+    assert(/chineseIme/.test(engJs), '要允许用户关掉');
+
+    // 联网验证端点：不能让 gstatic 把网络标成「!」
+    assert(/captive_portal_http_url/.test(adbJs), '要设置国内联网验证端点');
+    assert(/connect\.rom\.miui\.com/.test(adbJs), '端点要国内可达');
+
+    // 设置页要有开关
+    assert(/setLocale/.test(html) && /setChineseIme/.test(html), '设置页要暴露语言/输入法开关');
+  });
+
+  await test('方向自愈：平板/横屏画面躺倒 90° 要能自动纠正', () => {
+    const root = path.join(__dirname, '..');
+    const engJs = fs.readFileSync(path.join(root, 'src', 'core', 'engine.js'), 'utf8');
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+
+    // 判断依据：init=WxH 与 cur=WxH 的宽高顺序相反 = 逻辑空间被旋转了
+    assert(/_healOrientation/.test(engJs), '要有方向自愈方法');
+    assert(/init=\(\\d\+\)x\(\\d\+\)/.test(engJs), '要读 init 面板尺寸');
+    assert(/cur=\(\\d\+\)x\(\\d\+\)/.test(engJs), '要读 cur 逻辑空间');
+    assert(/initLand === curLand/.test(engJs), '一致时应直接返回（零写入）');
+    assert(/_healOrientation/.test(engJs.slice(engJs.indexOf('startWatchdog'))), '看门狗要周期自愈');
+    // 应用刚起来 Activity 重建会覆盖方向，需要在那个时机补一次
+    assert(/onAppUp[\s\S]{0,600}_healOrientation/.test(mainJs), '应用起来后要立刻校正一次');
+    // 面板方向和设置不一致时不能靠这里修，要交给重启
+    assert(/panelLandscape/.test(engJs), '要能区分「该重启」和「该重锁方向」');
+  });
+
   await test('Linux 快捷方式：.desktop 要可执行、Exec 要转义、图标必须 PNG', () => {
     const os = require('os');
     const shortcut = require('../src/core/shortcut');
@@ -1047,9 +1117,14 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     // 关键：Windows 没有本机安卓，所以地址必须让用户填，且提示要能照着做。
     if (process.platform === 'win32') {
       const noHost = await b.check();
-      assert(noHost.ok === false, '没填地址时不应报告可用');
-      assert(/地址/.test(noHost.reason) || /adb/i.test(noHost.reason),
-        '没填地址时要提示去填地址（或先把 adb 部署好）');
+      // 开发机上可能真跑着一台 adb 设备（本机模拟器 / 手机），这时 check() 合理地
+      // 返回 ok:true。我们只验证「没有因为平台不对而拒绝」，不断言一定失败。
+      assert(!/只能在 FydeOS/.test(noHost.reason || ''),
+        'Windows 上不该以「平台不对」为由一律拒绝');
+      if (!noHost.ok) {
+        assert(/地址/.test(noHost.reason) || /adb/i.test(noHost.reason),
+          '没填地址时要提示去填地址（或先把 adb 部署好）');
+      }
 
       // 填了地址之后就不该再因为「平台不对」被拒
       const { execFileSync } = require('child_process');

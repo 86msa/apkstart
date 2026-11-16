@@ -765,6 +765,12 @@ async function runLaunch(pkg) {
         attachAppWindow()
           .then((ok) => { earlyAttachOk = ok; mark(`early attach=${ok}`); })
           .catch(() => { earlyAttachOk = false; });
+        // 应用刚起来时 Activity 还在重建，会按自己声明的方向（portrait）再转一次，
+        // 把刚锁好的方向覆盖掉 —— 这就是「平板/横屏模式下画面总是 90 度躺着」。
+        // 等它稳定后补一次方向自愈（读 init/cur，只有真躺倒才写）。
+        setTimeout(() => {
+          runtime._healOrientation?.().catch(() => {});
+        }, 1800);
       },
       // 启动前先把面板方向校正到设置要求的那个。
       // 横屏只能靠物理面板（hw.lcd.width/height 互换）+ 重启实现，而这一项是在

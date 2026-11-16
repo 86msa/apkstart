@@ -526,6 +526,16 @@ class EmulatorEngine {
     };
   }
 
+  /**
+   * 要注入的系统语言。默认简体中文；用户可在设置里改（engine.locale），
+   * 设成 'en-US' 或 'off' 就回到镜像原生英文。
+   */
+  _guestLocale() {
+    const v = String(this.settings?.engine?.locale || 'zh-CN').trim();
+    if (!v || v === 'off' || /^false$/i.test(v)) return '';
+    return v;
+  }
+
   buildArgs({
     headless = true, accel = 'auto', port = 5554,
     gpu = 'software', memoryMB = 2048, cores = 2,
@@ -534,8 +544,7 @@ class EmulatorEngine {
     const args = [
       '-avd', AVD_NAME,
       '-port', String(port),
-      // 音频：默认开启（让安卓应用的提示音/视频声音能放出来）。
-      // 仅当用户在设置里显式关闭时才传 -no-audio 省一点 CPU。
+      // 音频：默认开启（让安卓应用的提示音/视频声音能放出来）。      // 仅当用户在设置里显式关闭时才传 -no-audio 省一点 CPU。
       ...(this.settings?.engine?.audio === false ? ['-no-audio'] : []),
       '-no-boot-anim',
       '-no-metrics',
@@ -555,6 +564,14 @@ class EmulatorEngine {
     // 显式声明不限速：默认值虽然是 full，但某些 -gpu / -net 组合下会被带上
     // 模拟器的保守配置，视频类应用（红果、抖音）首屏就会明显慢半拍。
     args.push('-netdelay', 'none', '-netspeed', 'full');
+    // 系统语言：默认简体中文。
+    // 实测 `-prop persist.sys.locale=zh-CN` 完全无效 —— 模拟器会拦截 persist.sys.*
+    // 这类受保护属性，ro.product.locale 又被镜像 build.prop 覆盖；guest 里 getprop
+    // 一个都看不到。官方专门给了 -change-locale：它会真正改系统语言并重启 framework，
+    // 且会写进 /data，从快照恢复也能保留。
+    // 用户可在设置里改成其它 locale 或关掉（engine.locale='off'）。
+    const locale = this._guestLocale();
+    if (locale) args.push('-change-locale', locale);
     // DNS：安卓默认用 10.0.2.3（转发到主机 DNS）。主机走 VPN / 公司网 / 某些运营商
     // 时，一次解析能拖到几百毫秒，表现为「页面转圈半天才开始加载」。给一份国内公共
     // DNS 作为首选，失败时系统仍会回退。用户可在设置里关掉（内网域名场景）。
@@ -886,7 +903,22 @@ class EmulatorEngine {
     }
     const ip = ips[0];
     const gw = /^10\.0\.2\./.test(ip) ? '10.0.2.2' : ip.replace(/\.\d+$/, '.1');
-    return { ok: true, reason: '', gateway: gw, ip, wifiConnected: connected };
+    // 有 IP 不等于能上网。实测拿到 10.0.2.16 但 DNS/路由被掐时，应用首页还是
+    // 「网络错误」，而上层却以为网络正常。这里补一次真实 HTTP 探测。
+    // 用 nc 直连 80 端口而不是 ping：QEMU 用户态 NAT 会拦 ICMP，ping 必然误报。
+    // 只在「等待网络就绪」那条路径（waitMs>0）上做，快速轮询跳过——否则每 3 秒
+    // 就要花 4 秒探测，反而把启动拖慢。结论放进 reachable，不改 ok：有 IP 就先
+    // 让应用起来，一次 DNS 抖动不该卡住整个启动。
+    let reachable = null;
+    if (waitMs > 0) {
+      const probe = await sh(
+        "echo -e 'GET /generate_204 HTTP/1.0\\r\\nHost: connect.rom.miui.com\\r\\n\\r\\n' "
+        + "| nc -w 4 connect.rom.miui.com 80 2>/dev/null | head -1",
+        7000,
+      );
+      reachable = /HTTP\/1\.[01]\s+204/.test(probe);
+    }
+    return { ok: true, reason: '', gateway: gw, ip, wifiConnected: connected, reachable };
   }
 
   /**

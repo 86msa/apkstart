@@ -288,6 +288,11 @@ class AppWindow {
     const shown = await this.agent.show().catch((e) => ({ ok: false, error: e.message }));
     this._detachedDebug += ` show=${JSON.stringify(shown)}`;
     if (!shown || shown.ok === false) { this.lastEmbedError = this._detachedDebug; return false; }
+    // 窗口标题换成应用名，任务栏/Alt+Tab 里不该再出现 "Android Emulator - apkstart:5554"。
+    // 用户明确要求过「android emulator 的名称改为 apkstart」；这里优先用应用名，
+    // 没有标签时退回 ApkStart。代理会在巡检里持续补设，防止 Qt 自己改回去。
+    const title = this.state && this.state.label ? this.state.label : 'ApkStart';
+    await this.agent.setTitle(title).catch(() => {});
     await sleep(300);
     // 按屏幕可用区居中和 sizing。
     // 注意：模拟器原生窗口自己按设备面板比例锁宽高比（竖屏 9:16），

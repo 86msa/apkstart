@@ -207,6 +207,13 @@ class WinAgent extends EventEmitter {
       w: Math.round(rect.w), h: Math.round(rect.h),
     }, 4000);
   }
+  /**
+   * 把模拟器原生窗口的标题从 "Android Emulator - apkstart:5554" 改成用户看得懂的名字。
+   * 传空串时默认 "ApkStart"。代理会在巡检里持续补设（Qt 偶尔会自己改回去）。
+   */
+  async setTitle(text = 'ApkStart') {
+    return this.call({ cmd: 'title', text: String(text || 'ApkStart') }, 4000);
+  }
   async probe() { return this.call({ cmd: 'probe' }, 4000); }
   /** 列出当前可见的顶层窗口（用于验证「只有软件界面 / 只有安卓应用窗口」） */
   async windows() { return this.call({ cmd: 'windows' }, 4000); }

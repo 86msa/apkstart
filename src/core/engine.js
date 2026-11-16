@@ -703,7 +703,66 @@ class Runtime {
     if (!this._freeformReady) {
       try { this._freeformReady = await client.ensureFreeform(); } catch (_) { /* ignore */ }
     }
+    // 中文环境（系统语言 + 中文输入法）每次**开机**只做一次。
+    // 系统语言靠 emulator -prop 注入（SELinux 保护，运行时改不了），这里补的是
+    // 应用级 locale / 时区，以及静默装好并启用随包带的谷歌拼音输入法。
+    // 用户可在设置里关掉自动配置（engine.chineseIme=false）。
+    if (!this._chineseReady && this.settings.engine.chineseIme !== false) {
+      try {
+        const locale = this.settings.engine.locale || 'zh-CN';
+        await client.ensureChineseLocale(locale);
+        const path = require('path');
+        const apk = path.join(this.appRoot, 'assets', 'PinyinIME.apk');
+        const r = await client.ensureChineseIme(apk, {
+          setDefault: this.settings.engine.chineseImeDefault !== false,
+        });
+        // 只有真的成功了才置位。失败时允许下一次 prepare() 重试 ——
+        // 否则一次偶发的 adb 抖动就会让这台机器永远没有中文输入法。
+        if (r && r.ok) this._chineseReady = true;
+        this.log(`中文输入法：${r.ok ? (r.installed ? '已安装并启用' : '已就绪') : (r.reason || '未就绪')}`);
+        // -change-locale 只在「全量引导」时执行并重启 framework；从 quickboot 快照
+        // 恢复时会被跳过。旧快照是英文的，所以检测到系统语言不对就作废快照、
+        // 让下次开机冷启动一次（带 -change-locale）。之后存的新快照就是中文的，
+        // 不用再重启。marker 保证一生只纠正一次。
+        await this._ensureSystemLocale(client, locale);
+      } catch (e) {
+        this.log(`中文环境初始化跳过：${e.message}`);
+      }
+    }
     this.startWatchdog();
+  }
+
+  /**
+   * 系统 UI 语言校正（一次性）。
+   *
+   * 实测结论（很容易踩错）：-change-locale 生效后**不会**写 persist.sys.locale，
+   * ro.product.locale 也仍是镜像的 en-US；它真正改的是
+   * `settings system system_locales`（语言设置页显示「中文（中国）」，系统 UI 全中文）。
+   * 所以判断「中文是否已经生效」要看 system_locales，不是 getprop。
+   *
+   * -change-locale 只在「全量引导」时执行并重启 framework；从 quickboot 快照恢复时
+   * 会被跳过。旧快照是英文的，所以检测到不对就作废快照、让下次开机冷启动一次。
+   * 之后存的新快照就是中文的，不用再重启。marker 保证一生只纠正一次。
+   */
+  async _ensureSystemLocale(client, locale) {
+    const fs = require('fs');
+    const path = require('path');
+    const want = String(locale || 'zh-CN');
+    if (want === 'off' || want === 'en-US') return;
+    // 已经生效（system_locales 是目标语言，或语言列表里第一项是它）
+    const cur = await client.shell('settings get system system_locales', { timeout: 8000 }).catch(() => '');
+    const s = String(cur).trim();
+    if (s === want || s.indexOf(want) === 0 || /^zh[-_]/.test(s)) return;
+    const marker = path.join(store.DATA_DIR, 'locale-' + want.replace(/[^a-zA-Z0-9_-]/g, '_') + '.done');
+    if (fs.existsSync(marker)) return;
+    try {
+      fs.writeFileSync(marker, String(Date.now()));
+      this.log(`系统语言仍为 ${s || '(空)'}，作废旧快照，下次开机冷启动切到 ${want}`);
+      this.emulator.invalidateSnapshot();
+      this.emulator.forceColdBootOnNextStart();
+    } catch (e) {
+      this.log(`系统语言校正跳过：${e.message}`);
+    }
   }
 
   /** 优雅停止：emulator 走控制台关机，QEMU 走 monitor */
@@ -1187,10 +1246,47 @@ class Runtime {
 
   // ---------------- 空闲回收 ----------------
 
+  /**
+   * 方向自愈：保证「逻辑显示空间」和「物理面板」方向一致。
+   *
+   * 判断依据（实机 dumpsys window displays）：
+   *   init=1280x720 ... cur=1280x720   → 正常（横屏面板 + 横屏逻辑）
+   *   init=1280x720 ... cur=720x1280   → 躺倒：逻辑空间被旋转了 90°
+   * 一旦看到 cur 与 init 的宽高顺序相反，就说明有应用/系统把方向改回去了，
+   * 此时重新锁方向并忽略应用的方向请求即可纠正，不用重启虚拟机。
+   *
+   * 只在真的不一致时写 settings，正常情况下每 60 秒只有一次只读 shell。
+   */
+  async _healOrientation() {
+    if (!this.emulator || !this.emulator.running()) return;
+    const wantLand = !!this.settings.display.landscape;
+    const panelLand = typeof this.emulator.panelLandscape === 'function'
+      ? this.emulator.panelLandscape() : null;
+    // 面板方向和设置不一致 → 该重启，不是这里能修的（runLaunch.beforeStart 会处理）
+    if (panelLand !== null && panelLand !== wantLand) return;
+    const c = this.client();
+    const out = await c.shell('dumpsys window displays', { timeout: 12000 }).catch(() => '');
+    const init = /init=(\d+)x(\d+)/.exec(out);
+    const cur = /cur=(\d+)x(\d+)/.exec(out);
+    if (!init || !cur) return;
+    const initLand = Number(init[1]) > Number(init[2]);
+    const curLand = Number(cur[1]) > Number(cur[2]);
+    if (initLand === curLand) return;   // 一致，什么都不做
+    this.log(`方向自愈：init=${init[1]}x${init[2]} cur=${cur[1]}x${cur[2]} 已躺倒，重新锁方向`);
+    await c.resetDisplayOverrides(wantLand).catch(() => {});
+    // 应用已经在前台，再补一次（resetDisplayOverrides 可能被随后起来的 Activity 覆盖）
+    await c.setOrientation(wantLand).catch(() => {});
+  }
+
   startWatchdog() {
     if (this._watchdog) return;
     this._watchdog = setInterval(async () => {
       const s = this.settings;
+      // 方向自愈：应用启动 / Activity 重建 / 系统弹窗都可能把 user-rotation 或
+      // 「忽略应用方向请求」改回去。一旦被改回去，横屏面板上的画面就会躺倒 90°
+      // （用户说的「平板模式软件总是 90 度躺着」）。这里每轮巡检读一次真实状态，
+      // 只有在**确实不一致**时才纠正，正常情况零写入。
+      await this._healOrientation().catch(() => {});
       const limit = (s.engine.idleShutdownMinutes || 0) * 60000;
       if (!limit) return;
       // 接管来的模拟器没有本地 proc 句柄，vmRunning 会是 false：

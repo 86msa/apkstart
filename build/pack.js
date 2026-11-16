@@ -74,9 +74,11 @@ for (const rel of ['d3dcompiler_47.dll']) {
 }
 
 // 2. 应用本体
+// assets/ 里是随包分发的资源：PinyinIME.apk（中文输入法），开机时由
+// Runtime.prepare() 静默装进安卓。漏掉它用户就打不了中文。
 console.log('复制应用…');
 const appDir = path.join(OUT, 'resources', 'app');
-for (const item of ['package.json', 'src', 'LICENSE']) {
+for (const item of ['package.json', 'src', 'assets', 'LICENSE']) {
   const src = path.join(ROOT, item);
   if (fs.existsSync(src)) copy(src, path.join(appDir, item));
 }

@@ -800,6 +800,8 @@ function fillSettings(s) {
   if ($('setRenderSize')) $('setRenderSize').value = eng.renderSize || 'auto';
   if ($('setDataGB')) $('setDataGB').value = String(Number(eng.dataPartitionGB || 0));
   if ($('setFastDns')) $('setFastDns').checked = eng.fastDns !== false;
+  if ($('setLocale')) $('setLocale').value = eng.locale || 'zh-CN';
+  if ($('setChineseIme')) $('setChineseIme').checked = eng.chineseIme !== false;
   if ($('setKeepSnapshot')) $('setKeepSnapshot').checked = eng.keepSnapshot !== false;
   $('setDisplayMode').value = d.mode === 'fullscreen' ? 'fullscreen' : 'window';
   if ($('setAutoFullscreen')) $('setAutoFullscreen').value = d.autoFullscreenOnLaunch === true ? 'on' : 'off';
@@ -1035,6 +1037,22 @@ function bindSettings() {
   }
   if ($('setFastDns')) {
     $('setFastDns').addEventListener('change', (e) => save({ engine: { fastDns: e.target.checked } }));
+  }
+  if ($('setLocale')) {
+    $('setLocale').addEventListener('change', async (e) => {
+      state.settings = await api.setSettings({ engine: { locale: e.target.value } });
+      toast({ title: '系统语言已更新', body: '下次重启安卓运行时后生效', type: 'ok' });
+    });
+  }
+  if ($('setChineseIme')) {
+    $('setChineseIme').addEventListener('change', async (e) => {
+      state.settings = await api.setSettings({ engine: { chineseIme: e.target.checked } });
+      toast({
+        title: e.target.checked ? '已开启中文输入法' : '已关闭中文输入法',
+        body: '下次重启安卓运行时后生效',
+        type: 'ok',
+      });
+    });
   }
   if ($('setKeepSnapshot')) {
     $('setKeepSnapshot').addEventListener('change', (e) => save({ engine: { keepSnapshot: e.target.checked } }));

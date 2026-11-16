@@ -788,6 +788,14 @@ class AdbClient {
       'settings put global transition_animation_scale 0',
       'settings put global animator_duration_scale 0',
       'settings put system screen_off_timeout 2147483647',
+      // 联网验证：安卓默认拿 connectivitycheck.gstatic.com 判断「是否真能上网」，
+      // 国内连不上它，系统就一直给网络打「!」标记（已连接但无法访问互联网），
+      // 部分应用据此自我判定离线、拒绝加载内容。换成国内返回 204 的端点。
+      // 每次启动都写一次（幂等、单条 shell 里，几乎零成本），这样即使从旧快照
+      // 恢复、或用户手动改过系统设置，也能自动纠正回来。
+      'settings put global captive_portal_http_url http://connect.rom.miui.com/generate_204',
+      'settings put global captive_portal_https_url https://connect.rom.miui.com/generate_204',
+      'settings put global captive_portal_mode 0',
       // 注意：这里不要再写 wm user-rotation / accelerometer_rotation。
       // 方向由 setOrientation / resetDisplayOverrides 按当前横竖屏状态统一定，
       // 在这里写死 lock 0 会把横屏方向覆盖回竖屏（画面躺倒）。
@@ -861,6 +869,82 @@ class AdbClient {
     } catch (_) {
       return false;
     }
+  }
+
+  /**
+   * 保证 guest 里有一套能打中文的输入法。
+   *
+   * 系统镜像（Google Play 版）只带 LatinIME（英文键盘），Gboard 的中文语言包又要
+   * 联网下载、在模拟器里极不可靠。所以随包带一个 AOSP 谷歌拼音输入法
+   * （assets/PinyinIME.apk，含 x86_64 原生库），开机后静默装好并启用。
+   *
+   * 幂等：已安装就跳过，用户手动换掉默认输入法后不强行改回去。
+   *
+   * @param {string} apkPath PinyinIME.apk 的绝对路径
+   * @param {object} [o] { setDefault } 是否设为默认输入法（默认 true）
+   * @returns {Promise<{ok:boolean, installed?:boolean, ime?:string, reason?:string}>}
+   */
+  async ensureChineseIme(apkPath, { setDefault = true } = {}) {
+    const IME_PKG = 'com.android.inputmethod.pinyin';
+    const IME_ID = IME_PKG + '/.PinyinIME';
+    // 组件名写死但校验存在：ime list -s 只列**已启用**的输入法，用它判断
+    // 「装没装」会在刚安装完时误判为「服务未注册」，于是永远走不到 ime enable。
+    // 正确做法是用 pkg 是否已安装来判断，组件名用 ime list -a 交叉确认。
+    const pkgInstalled = async () => {
+      const out = await this.shell(`pm list packages ${IME_PKG}`, { timeout: 10000 }).catch(() => '');
+      return String(out).indexOf('package:' + IME_PKG) >= 0;
+    };
+    const findEnabledIme = async () => {
+      const out = await this.shell('ime list -s', { timeout: 10000 }).catch(() => '');
+      return String(out).split('\n').map((s) => s.trim()).find((s) => s.indexOf(IME_PKG) === 0) || '';
+    };
+    try {
+      let installed = await pkgInstalled();
+      let justInstalled = false;
+      if (!installed) {
+        if (!apkPath || !fs.existsSync(apkPath)) {
+          return { ok: false, reason: '输入法 APK 缺失' };
+        }
+        await this.install(apkPath);
+        installed = true;
+        justInstalled = true;
+        // 装完等包管理器扫到这个包
+        for (let i = 0; i < 6; i += 1) {
+          // eslint-disable-next-line no-await-in-loop
+          installed = await pkgInstalled();
+          if (installed) break;
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((r) => setTimeout(r, 800));
+        }
+      }
+      if (!installed) return { ok: false, justInstalled, reason: '输入法包未注册' };
+      // 启用 + 设为默认（secure settings 可写，不需要 root）。
+      // 每次都执行：从旧快照恢复时 enabled 标记可能丢失，或用户手动换过默认输入法。
+      const cmds = [`ime enable ${IME_ID}`];
+      if (setDefault) cmds.push(`settings put secure default_input_method ${IME_ID}`);
+      await this.shell(cmds.join(' ; '), { timeout: 12000 }).catch(() => '');
+      const ime = await findEnabledIme();
+      return { ok: !!ime, installed: justInstalled, ime: ime || IME_ID };
+    } catch (e) {
+      return { ok: false, reason: e.message };
+    }
+  }
+
+  /**
+   * 保证系统语言是简体中文。
+   * persist.sys.locale 是 SELinux 保护的只读属性，运行时改不了（会报
+   * "Failed to set property"），真正生效靠 emulator 启动时的 -prop 注入。
+   * 这里做的是能做的部分：把应用级 locale 和时区设好，让界面立刻中文、时间正确。
+   */
+  async ensureChineseLocale(locale = 'zh-CN') {
+    const cmds = [
+      'settings put system system_locales ' + locale,
+      'setprop persist.sys.timezone Asia/Shanghai',
+      // 24 小时制 + 中文常见的日期格式
+      'settings put system time_12_24 24',
+    ];
+    await this.shell(cmds.join(' ; '), { timeout: 12000 }).catch(() => '');
+    return true;
   }
 
   /** 当前逻辑分辨率（横屏切换后窗口要按它算宽高比） */
