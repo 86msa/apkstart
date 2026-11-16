@@ -513,7 +513,10 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     const j = adb.indexOf('async resetDisplayOverrides(');
     const body = adb.slice(i, j);
     assert(!/wm size \d/.test(body), 'setOrientation 不得再设置 wm size 覆盖');
-    assert(/wm density 190/.test(body), 'density 只作为退化路径保留');
+    // density 现在统一走 tabletDensity()（用户可在设置里关掉平板排版），
+    // 但常量本身必须仍是 190（720 宽 → 606dp 才越过平板断点）。
+    assert(/wm density \$\{tabletDensity\(\)\}/.test(body), 'density 只作为退化路径保留');
+    assert(/const TABLET_DENSITY = 190/.test(adb), '平板密度常量必须是 190');
   });
 
   await test('游戏模式必须使用高优先级且关闭全局鼠标钩子', () => {
@@ -1021,9 +1024,10 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(/initLand !== curLand/.test(engJs), '只在宽高顺序相反（真躺倒）时才重锁方向');
     // 横屏平板模式的稳定性：没躺倒也要校验 ignore-orientation + density 是否丢失并补齐
     assert(/mSetIgnoreOrientationRequest=true/.test(engJs), '横屏要校验 ignore-orientation 是否还在');
-    assert(/Override density:\s*190|density.*190/.test(engJs), '横屏要校验 density 190 是否还在');
+    assert(/Override density:/.test(engJs), '要读 Override density 判断是否丢失');
+    assert(/tabletMode/.test(engJs), '平板排版开关要能被关掉');
     assert(/wm set-ignore-orientation-request true/.test(engJs), '丢了要补 ignore-orientation');
-    assert(/wm density 190/.test(engJs), '丢了要补 density 190');
+    assert(/wm density \$\{densityWanted\}/.test(engJs), '丢了要补 density');
     assert(/_healOrientation/.test(engJs.slice(engJs.indexOf('startWatchdog'))), '看门狗要周期自愈');
     // 应用刚起来 Activity 重建会覆盖方向，需要在那个时机补一次。
     // 窗口放宽到 2200 字符：onAppUp 的 then 回调里还要处理开机动画淡出，

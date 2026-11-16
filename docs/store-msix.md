@@ -135,6 +135,7 @@ Add-AppxPackage -Path 'dist\store\ApkStart_0.5.0.0_x64.msix'
 
 1. **整包更新**：MSIX 没有差分下载，每次发版用户都要重下 ~1.3 GB。
 2. **首次启动要展开镜像**：包里的 `system.img.xz`（472 MB）要展开成 ~3.3 GB，约 1 分钟。
+   展开目标是 `%USERPROFILE%\ApkStart\data\system-images`，不在只读的包目录里。
 3. **只有 WHPX 能用**：商店版装不了 AEHD 内核驱动。用户需要在「启用或关闭 Windows 功能」
    里勾上「虚拟机平台」，否则会掉到 TCG 软件模拟（极慢）。
 4. **不能自更新**：更新由 Store 负责（设置 → 应用 → 更新）。

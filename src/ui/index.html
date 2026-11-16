@@ -249,6 +249,16 @@
             之后再打开同一方向的应用都是秒进。</span>
         </div>
         <div class="field">
+          <label>平板排版</label>
+          <select id="setTabletMode">
+            <option value="on">打开（推荐 · 逻辑密度 190dpi，sw606dp 走平板排版）</option>
+            <option value="off">关闭（镜像默认密度，手机排版）</option>
+          </select>
+          <span class="sub">720 宽按 190dpi 算等于 606dp，正好越过 Android 的 600dp 平板断点，
+            红果短剧的双列剧集页、设置页的分栏都只在这个排版下出现。关掉会回到手机排版
+            （字更大、信息更少）。切换后下次打开应用生效。</span>
+        </div>
+        <div class="field">
           <label>当前面板方向</label>
           <select id="setLandscape">
             <option value="portrait">竖屏面板</option>

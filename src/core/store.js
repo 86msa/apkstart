@@ -168,6 +168,10 @@ const DEFAULT_SETTINGS = {
     // 上面的 landscape 字段在 auto 模式下退化成「当前面板实际方向」这个事实，
     // 由 restartForOrientation 写入，不再当偏好去覆盖应用自己的方向。
     orientationMode: 'auto',
+    // 平板排版：把 guest 的逻辑密度覆盖成 190dpi（720 宽 → sw606dp ≥ 600dp，
+    // 越过 Android 的平板断点）。红果短剧这类应用只有在平板排版下才有双列剧集页，
+    // 也是用户要的「平板模式」。关掉就回到镜像默认密度（手机排版）。
+    tabletMode: true,
     // 窗口模式：true=把安卓画面嵌进 ApkStart 自己的窗口（观感统一）；
     // false=让模拟器开自己的原生窗口（绕开嵌入固有的黑边/坐标错位/铺不满问题）。
     windowEmbed: true,

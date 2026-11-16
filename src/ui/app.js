@@ -844,6 +844,7 @@ function fillSettings(s) {
   if ($('setAutoFullscreen')) $('setAutoFullscreen').value = d.autoFullscreenOnLaunch === true ? 'on' : 'off';
   if ($('setLandscape')) $('setLandscape').value = d.landscape === true ? 'landscape' : 'portrait';
   if ($('setOrientationMode')) $('setOrientationMode').value = d.orientationMode || 'auto';
+  if ($('setTabletMode')) $('setTabletMode').value = d.tabletMode === false ? 'off' : 'on';
   $('setPortrait').value = d.portrait || '900x1600';
   if ($('setWindowEmbed')) $('setWindowEmbed').value = d.windowEmbed === false ? 'detached' : 'embed';
   $('portraitField').hidden = $('setDisplayMode').value === 'fullscreen';
@@ -1208,6 +1209,17 @@ function bindSettings() {
         body: mode === 'auto'
           ? '下次打开应用时会按应用自己的方向选面板，方向不一致的话会重启一次运行时。'
           : '下次打开应用时会重启一次运行时把面板切到指定方向，之后不再重启。',
+        type: 'ok',
+      });
+    });
+  }
+  if ($('setTabletMode')) {
+    $('setTabletMode').addEventListener('change', async (e) => {
+      const on = e.target.value === 'on';
+      state.settings = await api.setSettings({ display: { tabletMode: on } });
+      toast({
+        title: on ? '已打开平板排版' : '已关闭平板排版',
+        body: '下次打开应用时生效（会重启一次运行时来改逻辑密度）。',
         type: 'ok',
       });
     });
