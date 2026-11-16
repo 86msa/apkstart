@@ -59,24 +59,67 @@ function versionNumbers(v) {
 }
 
 /**
+ * 检测 GPU 厂商（NVIDIA / AMD / Intel），用于调整渲染后端优先级。
+ * 只在 Windows 上查 WMI；其他平台返回 'unknown'。
+ * 结果缓存 10 分钟，避免每次 chooseProfile 都 spawn wmic。
+ */
+let _gpuVendorCache = { vendor: 'unknown', at: 0 };
+function detectGpuVendor() {
+  if (process.platform !== 'win32') return 'unknown';
+  if (Date.now() - _gpuVendorCache.at < 600000) return _gpuVendorCache.vendor;
+  try {
+    const { execFileSync } = require('child_process');
+    // wmic 在 Win11 24H2+ 已被移除，改用 PowerShell Get-CimInstance
+    let names = '';
+    try {
+      names = execFileSync('powershell.exe', [
+        '-NoProfile', '-Command',
+        '(Get-CimInstance Win32_VideoController).Name -join "|"',
+      ], { encoding: 'utf8', windowsHide: true, timeout: 8000 });
+    } catch (_) {
+      // 回退到 wmic（老系统仍可用）
+      try {
+        names = execFileSync('wmic', ['path', 'win32_videocontroller', 'get', 'name', '/format:list'],
+          { encoding: 'utf8', windowsHide: true, timeout: 5000 });
+      } catch (__) { /* ignore */ }
+    }
+    const lower = String(names).toLowerCase();
+    let vendor = 'unknown';
+    // 优先匹配独显（NVIDIA/AMD），虚拟显示适配器排在后面
+    if (/nvidia|geforce|rtx\s|gtx\s/.test(lower)) vendor = 'nvidia';
+    else if (/(?<!virtual\s)(amd|radeon|rx\s\d)/.test(lower)) vendor = 'amd';
+    else if (/intel|uhd\s|iris|arc\s/.test(lower)) vendor = 'intel';
+    _gpuVendorCache = { vendor, at: Date.now() };
+    return vendor;
+  } catch (_) {
+    _gpuVendorCache = { vendor: 'unknown', at: Date.now() };
+    return 'unknown';
+  }
+}
+
+/**
  * emulator 36.4.9 起把 swiftshader_indirect 标记为弃用，新增 -gpu software。
  * 37.x 上传 swiftshader_indirect 会出现 GL 初始化失败/直接退出（设备差异很大）。
  * 因此必须按版本挑候选，且每个候选都有退路。
+ *
+ * 按 GPU 厂商微调优先级：
+ *   NVIDIA：host 几乎总是最优（驱动成熟），swangle 兜底
+ *   AMD：host 在部分驱动下会崩（尤其老驱动），swangle 提到第二优先
+ *   Intel：host 通常 OK，但集显性能弱时 swangle 更稳
+ *   unknown：保持默认顺序
  */
 function gpuCandidates(emulatorVersion) {
   const [major, minor, patch] = versionNumbers(emulatorVersion);
   const modern = major > 36 || (major === 36 && (minor > 4 || (minor === 4 && patch >= 9)));
-  return modern
-    // 顺序即「自动模式的尝试优先级」：
-    // 1) host        —— 用真实显卡渲染，最省 CPU、最跟手；
-    // 2) swangle     —— ANGLE 跑在 SwiftShader 之上的软件渲染。比裸 software/swiftshader
-    //                  对 Android WebView 的合成层友好得多（红果/抖音这类「点同意后进主界面
-    //                  黑屏」就是裸软件渲染过不了 WebView 合成导致的），因此排在第二顺位；
-    // 3) software    —— 纯 SwiftShader 兜底，兼容性OK但 WebView 合成易黑屏，仅最后才用；
-    // 4) swiftshader —— 旧名兜底。
-    // 注意 safeGpu（关闭加速的 TCG 兜底）仍取 software，保证「慢但最兼容」。
+  const base = modern
     ? ['host', 'swangle', 'software', 'swiftshader']
     : ['host', 'swiftshader_indirect', 'swiftshader'];
+  const vendor = detectGpuVendor();
+  if (vendor === 'amd' && modern) {
+    // AMD 驱动在某些版本下 host 模式会 GL 初始化失败，把 swangle 提到前面
+    return ['swangle', 'host', 'software', 'swiftshader'];
+  }
+  return base;
 }
 
 /** Windows 8.3 短路径：中文用户名 / 中文安装目录时 emulator 会找不到文件 */
@@ -525,7 +568,7 @@ function vcRedistOk() {
 
 module.exports = {
   hostInfo, freeDiskMB, isAsciiPath, shortPath, lcdFor, liteProfile,
-  versionNumbers, gpuCandidates, chooseProfile, planVariants,
+  versionNumbers, gpuCandidates, detectGpuVendor, chooseProfile, planVariants,
   overridesFromSettings, autoProfile,
   freePortPair, freeAdbPort, snapshotKey, imageIdentity,
   diagnose, describeProfile, writeReport, vcRedistOk,

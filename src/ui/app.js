@@ -610,6 +610,7 @@ const MENU_ITEMS = [
   { key: 'stop', label: '关闭应用', onlyRunning: true },
   { key: 'shortcut', label: '创建桌面快捷方式' },
   { key: 'pin', label: '固定到顶部' },
+  { key: 'keymap', label: '按键映射…' },
   { divider: true },
   { key: 'reveal', label: '打开 APK 所在位置' },
   { key: 'clear', label: '清除应用数据' },
@@ -663,6 +664,7 @@ async function handleMenu(act) {
     }
     case 'shortcut': return createShortcut(pkg);
     case 'pin': return api.pin(pkg, !app.pinned).then(refreshApps);
+    case 'keymap': return showKeymapPicker(pkg, app.label);
     case 'reveal': return api.revealApk(pkg);
     case 'clear': {
       if (!window.confirm(`清除「${app.label}」的全部数据？此操作不可撤销。`)) return;
@@ -676,6 +678,39 @@ async function handleMenu(act) {
     }
     case 'uninstall': return uninstall(pkg);
     default: return undefined;
+  }
+}
+
+/**
+ * 按键映射预设选择器。用 confirm + prompt 做最简交互（不引入新 UI 组件）。
+ * 后续可以做成更精致的弹窗编辑器。
+ */
+async function showKeymapPicker(pkg, label) {
+  try {
+    const presets = await api.keymap.getPresets();
+    const current = await api.keymap.getMap(pkg);
+    const hasCurrent = current && current.length > 0;
+    const lines = presets.map((p, i) => `${i + 1}. ${p.label} — ${p.desc}`);
+    if (hasCurrent) lines.unshift('0. 清除当前映射');
+    const msg = `为「${label}」选择按键映射预设：\n\n${lines.join('\n')}\n\n输入编号：`;
+    const input = window.prompt(msg, hasCurrent ? '0' : '1');
+    if (input === null) return; // 取消
+    const idx = parseInt(input, 10);
+    if (hasCurrent && idx === 0) {
+      await api.keymap.setMap(pkg, []);
+      toast({ title: '已清除按键映射', body: label, type: 'ok' });
+      return;
+    }
+    const presetIdx = hasCurrent ? idx - 1 : idx;
+    if (presetIdx < 1 || presetIdx > presets.length) {
+      toast({ title: '无效编号', type: 'error' });
+      return;
+    }
+    const chosen = presets[presetIdx - 1];
+    await api.keymap.applyPreset(pkg, chosen.id);
+    toast({ title: `已套用「${chosen.label}」`, body: `${label} · 打开应用后键盘即可操控`, type: 'ok' });
+  } catch (e) {
+    toast({ title: '按键映射设置失败', body: e.message, type: 'error' });
   }
 }
 
@@ -788,6 +823,7 @@ function fillSettings(s) {
   $('setMouseWheelMode').value = ['smooth', 'native', 'off'].includes(s.engine.mouseWheelMode)
     ? s.engine.mouseWheelMode : 'smooth';
   $('setMouseSideButtons').checked = !!s.engine.mouseSideButtons;
+  if ($('setKeymapEnabled')) $('setKeymapEnabled').checked = s.engine.keymapEnabled !== false;
   $('setCompat').checked = !!(s.runtime && s.runtime.compatImage);
   $('setAutoShortcut').checked = !!s.createShortcutOnInstall;
   $('setStartMenuShortcut').checked = s.createStartMenuShortcut !== false;
@@ -1121,6 +1157,12 @@ function bindSettings() {
   $('setMouseRightBack').addEventListener('change', (e) => savePointer({ mouseRightBack: e.target.checked }));
   $('setMouseWheelMode').addEventListener('change', (e) => savePointer({ mouseWheelMode: e.target.value }));
   $('setMouseSideButtons').addEventListener('change', (e) => savePointer({ mouseSideButtons: e.target.checked }));
+  if ($('setKeymapEnabled')) {
+    $('setKeymapEnabled').addEventListener('change', async (e) => {
+      await api.keymap.setEnabled(e.target.checked);
+      toast({ title: e.target.checked ? '键盘映射已开启' : '键盘映射已关闭', type: 'ok' });
+    });
+  }
   $('setDeepTrim').addEventListener('change', async (e) => {
     await save({ engine: { deepTrim: e.target.checked } });
     // 关掉深度裁剪必须把之前 pm disable-user 的包恢复回来，否则影响是持久的

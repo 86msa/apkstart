@@ -80,6 +80,10 @@ const DEFAULT_SETTINGS = {
     // 多窗口时保留最近几个后台应用不墓碑化（便于秒切回、不掉登录态）。
     // 0 = 最省内存（只留前台），默认 1。
     keepBackground: 1,
+    // 按键映射（游戏键盘→触屏）：默认开启，用户可在设置里关
+    keymapEnabled: true,
+    // 每应用的按键映射表：{ "com.example.game": [{key:'w',action:'tap',x:0.15,y:0.75}, ...] }
+    keymaps: {},
   },
   runtime: {
     dir: '',                 // 空 = %APPDATA%\apkstart\runtime

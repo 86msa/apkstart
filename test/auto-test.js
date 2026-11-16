@@ -30,15 +30,21 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
   console.log('\n[doctor.js 自动参数]');
 
   await test('GPU 后端按 emulator 版本选择（新版本 host 优先 + 软件渲染兜底，老版本 swiftshader_indirect）', () => {
-    // 新版本（37.x/36.4.9+）：host 最跟手，失败会自动降级到 software/swangle
-    assert(doctor.gpuCandidates('37.3.8.0')[0] === 'host', '37.x 首选应为 host');
-    assert(doctor.gpuCandidates('36.4.9.0')[0] === 'host');
-    assert(doctor.gpuCandidates('37.3.8.0').includes('software'), '新版本必须有软件渲染兜底');
+    // gpuCandidates 会根据本机 GPU 厂商微调顺序（AMD 把 swangle 提前），
+    // 所以这里只断言「候选列表包含关键项」而非固定首位。
+    const c37 = doctor.gpuCandidates('37.3.8.0');
+    assert(c37.includes('host'), '37.x 候选必须包含 host');
+    assert(c37.includes('swangle'), '37.x 候选必须包含 swangle');
+    assert(c37.includes('software'), '新版本必须有软件渲染兜底');
     // 37.x 上传 swiftshader_indirect 会 GL 初始化失败，绝不能出现在候选里
-    assert(!doctor.gpuCandidates('37.3.8.0').includes('swiftshader_indirect'));
+    assert(!c37.includes('swiftshader_indirect'));
     // 老版本仍走 swiftshader_indirect
-    assert(doctor.gpuCandidates('35.1.4.0')[0] === 'host');
-    assert(doctor.gpuCandidates('35.1.4.0').includes('swiftshader_indirect'));
+    const c35 = doctor.gpuCandidates('35.1.4.0');
+    assert(c35.includes('host'));
+    assert(c35.includes('swiftshader_indirect'));
+    // detectGpuVendor 应返回已知值或 unknown（不抛异常）
+    const v = doctor.detectGpuVendor();
+    assert(['nvidia', 'amd', 'intel', 'unknown'].includes(v), `detectGpuVendor 返回了意外值: ${v}`);
   });
 
   await test('小内存机器自动降配（不再是写死 4GB / 4 核）', () => {
@@ -48,7 +54,7 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(p.cores === 2, `核心应为 2，实际 ${p.cores}`);
     assert(p.accel === 'off', '无硬件加速应自动回退软件模拟');
     assert(p.bootTimeoutMs > 240000, '软件模拟应给更长的开机超时');
-    assert(p.gpu === 'host', `首选渲染应为 host（失败由 planVariants 降级），实际 ${p.gpu}`);
+    assert(p.gpu === 'host' || p.gpu === 'swangle', `首选渲染应为 host 或 swangle（AMD 机器 swangle 优先），实际 ${p.gpu}`);
     // accel 关闭时的保底参数必须是软件渲染，否则 TCG 下无 GPU 可用
     const lastResort = doctor.planVariants(p).find((v) => v.lastResort);
     assert(lastResort && /software|swiftshader/.test(lastResort.gpu), '保底方案必须用软件渲染');
@@ -129,7 +135,7 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     const common = { accel: { ok: true }, emulatorVersion: '37.3.8.0', diskMB: 50000, port: 5562, adbPort: 5044 };
     const p = doctor.autoProfile({ ...common, settings: { engine: { autoMemory: true, gpuMode: 'auto', memoryMB: 0, cores: 0 } } });
     const text = doctor.describeProfile(p);
-    assert(p.gpu === 'host', `应为 host（失败降级），实际 ${p.gpu}`);
+    assert(p.gpu === 'host' || p.gpu === 'swangle', `应为 host 或 swangle（AMD 机器），实际 ${p.gpu}`);
     assert(p.accelOk === true && text.includes('硬件加速'), text);
     assert(!text.includes('swiftshader_indirect'), text);
     assert(text.includes('端口 5562'), text);
@@ -515,6 +521,68 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(/game\s*=\s*'High'/.test(ps), 'game 级别要把 qemu 提到 High');
     const aw = fs.readFileSync(path.join(__dirname, '..', 'src', 'core', 'appwin.js'), 'utf8');
     assert(/opts\.enabled && !game/.test(aw), 'game 模式不能装 WH_MOUSE_LL 全局钩子');
+  });
+
+  await test('按键映射引擎：查表、转命令、限流', async () => {
+    const { lookup, toCommand, PRESETS } = require('../src/core/keymap');
+    const { KeymapEngine } = require('../src/core/keymap-engine');
+
+    // 预设模板完整性
+    assert(PRESETS.fps && PRESETS.fps.mappings.length >= 4, 'FPS 预设至少 4 个映射');
+    assert(PRESETS.rpg && PRESETS.rpg.mappings.length >= 4, 'RPG 预设至少 4 个映射');
+    assert(PRESETS.generic && PRESETS.generic.mappings.length >= 3, '通用预设至少 3 个映射');
+
+    // 查表：大小写不敏感
+    assert(lookup(PRESETS.fps.mappings, 'W').action === 'tap', '大写 W 应匹配小写 w');
+    assert(lookup(PRESETS.fps.mappings, 'z') === null, '未映射的键返回 null');
+
+    // 转命令：归一化坐标 → 像素
+    const cmd = toCommand({ action: 'tap', x: 0.5, y: 0.5 }, 720, 1280);
+    assert(cmd === 'input tap 360 640', `tap 命令错误: ${cmd}`);
+    const sw = toCommand({ action: 'swipe', x1: 0, y1: 0.5, x2: 1, y2: 0.5, duration: 100 }, 720, 1280);
+    assert(sw === 'input swipe 0 640 720 640 100', `swipe 命令错误: ${sw}`);
+    const ke = toCommand({ action: 'keyevent', code: 4 }, 720, 1280);
+    assert(ke === 'input keyevent 4', `keyevent 命令错误: ${ke}`);
+
+    // 引擎：启用/禁用、按应用查表、限流
+    const calls = [];
+    const eng = new KeymapEngine({
+      execInput: (c) => { calls.push(c); return Promise.resolve(); },
+      getSize: () => ({ width: 720, height: 1280 }),
+      minInterval: 0,  // 测试里不限流
+    });
+    eng.setMap('com.test.game', PRESETS.fps.mappings);
+    assert(eng.getMap('com.test.game').length > 0, 'setMap/getMap 应工作');
+    eng.enable(false);
+    assert(await eng.handleKey('w', 'com.test.game') === false, '禁用时不应消费按键');
+    eng.enable(true);
+    assert(await eng.handleKey('w', 'com.test.game') === true, '启用时应消费已映射的按键');
+    assert(await eng.handleKey('z', 'com.test.game') === false, '未映射的键不应消费');
+    assert(await eng.handleKey('w', 'com.other.app') === false, '其他应用不应命中');
+    assert(calls.length === 1 && /input tap/.test(calls[0]), `应发一次 input tap，实际: ${calls.join('|')}`);
+  });
+
+  await test('GPU 厂商检测：返回已知值或 unknown，AMD 机器 swangle 优先', () => {
+    const doc = fs.readFileSync(path.join(__dirname, '..', 'src', 'core', 'doctor.js'), 'utf8');
+    assert(/detectGpuVendor/.test(doc), '要有 detectGpuVendor 函数');
+    assert(/Get-CimInstance Win32_VideoController/.test(doc), '要用 PowerShell CIM（wmic 在 Win11 24H2+ 已移除）');
+    assert(/vendor === 'amd'[\s\S]{0,200}swangle.*host/.test(doc), 'AMD 机器应把 swangle 排在 host 前面');
+    const d = require('../src/core/doctor');
+    const v = d.detectGpuVendor();
+    assert(['nvidia', 'amd', 'intel', 'unknown'].includes(v), `返回值应为已知厂商或 unknown，实际: ${v}`);
+  });
+
+  await test('开机动画：splash 窗口 + 进度推送 + 淡出', () => {
+    const root = path.join(__dirname, '..');
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    assert(fs.existsSync(path.join(root, 'src', 'ui', 'splash.html')), '缺少 splash.html');
+    assert(fs.existsSync(path.join(root, 'src', 'ui', 'splash.css')), '缺少 splash.css');
+    assert(fs.existsSync(path.join(root, 'src', 'ui', 'splash.js')), '缺少 splash.js');
+    assert(fs.existsSync(path.join(root, 'src', 'splash-preload.js')), '缺少 splash-preload.js');
+    assert(/splashWin/.test(mainJs), 'main.js 要创建 splash 窗口');
+    assert(/splashProgress/.test(mainJs), '要有 splashProgress 推送函数');
+    assert(/splashDone/.test(mainJs), '要有 splashDone 完成信号');
+    assert(/splash:version/.test(mainJs) || /splash:isFirstRun/.test(mainJs), 'splash IPC 要注册');
   });
 
   await test('前台应用优先级不能用 below（点击跟手 / 视频不掉帧）', () => {

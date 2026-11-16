@@ -104,6 +104,7 @@ contextBridge.exposeInMainWorld('apkstart', {
     rotate: () => invoke('shell:rotate'),
     back: () => invoke('shell:back'),
     forward: () => invoke('shell:forward'),
+    keyEvent: (key) => invoke('shell:keyEvent', key),
     onState: (cb) => {
       const handler = (_e, payload) => cb(payload);
       ipcRenderer.on('shell:state', handler);
@@ -119,6 +120,16 @@ contextBridge.exposeInMainWorld('apkstart', {
     tune: (pkg) => invoke('android:tune', pkg),
     permissions: (pkg) => invoke('android:permissions', pkg),
     grantAll: (pkg) => invoke('android:grantAll', pkg),
+  },
+
+  // 按键映射（游戏键盘→触屏）
+  keymap: {
+    getPresets: () => invoke('keymap:getPresets'),
+    getMap: (pkg) => invoke('keymap:getMap', pkg),
+    setMap: (pkg, mappings) => invoke('keymap:setMap', pkg, mappings),
+    setEnabled: (on) => invoke('keymap:setEnabled', on),
+    isEnabled: () => invoke('keymap:isEnabled'),
+    applyPreset: (pkg, presetId) => invoke('keymap:applyPreset', pkg, presetId),
   },
 
   pathForFile: (file) => webUtils.getPathForFile(file),

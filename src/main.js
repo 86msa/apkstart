@@ -32,6 +32,8 @@ const windowctl = require('./core/windowctl');
 const display = require('./core/display');
 const { WinAgent } = require('./core/agent');
 const pointer = require('./core/pointer');
+const { KeymapEngine } = require('./core/keymap-engine');
+const { PRESETS: KEYMAP_PRESETS } = require('./core/keymap');
 const { AppWindow, TITLEBAR_H } = require('./core/appwin');
 const { NotifyBridge } = require('./core/notify');
 const { AndroidSettings } = require('./core/android');
@@ -1883,6 +1885,43 @@ function registerIpc() {
     return false;
   });
 
+  // ---- 按键映射 ----
+  ipcMain.handle('shell:keyEvent', async (_e, key) => {
+    if (!keymapEngine || !keymapEngine.enabled) return false;
+    const pkg = currentAppPkg;
+    if (!pkg) return false;
+    return keymapEngine.handleKey(key, pkg);
+  });
+  ipcMain.handle('keymap:getPresets', () => {
+    return Object.entries(KEYMAP_PRESETS).map(([id, p]) => ({ id, label: p.label, desc: p.desc }));
+  });
+  ipcMain.handle('keymap:getMap', (_e, pkg) => keymapEngine ? keymapEngine.getMap(pkg) : []);
+  ipcMain.handle('keymap:setMap', (_e, pkg, mappings) => {
+    if (!keymapEngine) return { ok: false };
+    keymapEngine.setMap(pkg, mappings);
+    // 持久化到设置
+    const maps = { ...(store.getSettings().engine.keymaps || {}) };
+    if (mappings && mappings.length) maps[pkg] = mappings;
+    else delete maps[pkg];
+    store.saveSettings({ engine: { keymaps: maps } });
+    return { ok: true };
+  });
+  ipcMain.handle('keymap:setEnabled', (_e, on) => {
+    if (keymapEngine) keymapEngine.enable(!!on);
+    store.saveSettings({ engine: { keymapEnabled: !!on } });
+    return { ok: true };
+  });
+  ipcMain.handle('keymap:isEnabled', () => keymapEngine ? keymapEngine.enabled : false);
+  ipcMain.handle('keymap:applyPreset', (_e, pkg, presetId) => {
+    if (!keymapEngine || !KEYMAP_PRESETS[presetId]) return { ok: false };
+    const mappings = KEYMAP_PRESETS[presetId].mappings;
+    keymapEngine.setMap(pkg, mappings);
+    const maps = { ...(store.getSettings().engine.keymaps || {}) };
+    maps[pkg] = mappings;
+    store.saveSettings({ engine: { keymaps: maps } });
+    return { ok: true, mappings };
+  });
+
   // ---------------- 在线更新 ----------------
 
   ipcMain.handle('app:updateCheck', async (_e, opts = {}) => {
@@ -1990,6 +2029,23 @@ if (!gotLock) {
     });
     sharer = new Sharer(runtime);
     androidSet = new AndroidSettings(runtime);
+
+    // ---- 按键映射引擎 ----
+    const keymapEngine = new KeymapEngine({
+      execInput: (cmd) => runtime.client().shell(cmd, { timeout: 4000 }),
+      getSize: () => {
+        // 用当前面板尺寸（横屏 1280x720 / 竖屏 720x1280）
+        const land = !!(store.getSettings().display || {}).landscape;
+        return land ? { width: 1280, height: 720 } : { width: 720, height: 1280 };
+      },
+    });
+    // 从设置里加载每应用的映射表
+    const savedMaps = (store.getSettings().engine || {}).keymaps || {};
+    for (const [pkg, mappings] of Object.entries(savedMaps)) {
+      if (Array.isArray(mappings) && mappings.length) keymapEngine.setMap(pkg, mappings);
+    }
+    // 默认启用（用户可在设置里关）
+    keymapEngine.enable(store.getSettings().engine.keymapEnabled !== false);
 
     updater = new Updater({
       currentVersion: app.getVersion(),
