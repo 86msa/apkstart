@@ -454,7 +454,11 @@ async function autoDeploy({ force = false } = {}) {
     return { ok: false, error: 'cooldown', cooldown: true, until: lastFail + COOLDOWN_MS };
   }
   deploying = true;
-  const progress = (p) => send('provision:progress', { ...p, component: p.component || 'all' });
+  const progress = (p) => {
+    send('provision:progress', { ...p, component: p.component || 'all' });
+    // 同步推送到开机动画窗口
+    if (typeof splashProgress === 'function') splashProgress(p);
+  };
   let succeeded = false;
   try {
     const env = await runtime.provisioner.checkEnv();
@@ -800,7 +804,11 @@ async function runLaunch(pkg) {
     if (mainWindow && mainWindow.isVisible() && !IS_DEV) mainWindow.hide();
 
     const r = await installer.launch(pkg, {
-      onLog: (m) => { send('runtime:log', m); appLog(`  rt ${m}`); },
+      onLog: (m) => {
+        send('runtime:log', m); appLog(`  rt ${m}`);
+        // 同步到开机动画
+        if (typeof splashProgress === 'function') splashProgress({ message: m });
+      },
       onMark: mark,
       // 应用进程一出现就把画面接上去，不等后面那 4 秒的「确认不会崩」观察期。
       // 那 4 秒对稳定性有意义，但用户看到的是「点了没反应」；先让他看到应用在加载，
@@ -918,6 +926,8 @@ async function runLaunch(pkg) {
     }
     send('app:launched', { package: pkg, engine: r.engine });
     appLog(`launch ok ${pkg} ${attachMode}=${embedded}`);
+    // 安卓环境就绪 → 开机动画淡出
+    if (typeof splashDone === 'function') splashDone();
     return { ok: true, embedded };
   } catch (e) {
     appLog(`launch failed ${pkg}: ${e && (e.stack || e.message)}`);
@@ -1924,6 +1934,46 @@ if (!gotLock) {
     runtime = new Runtime(APP_ROOT);
     // 启动即留一行痕迹：出问题时用户把 app.log 发过来就能看到版本与数据目录
     appLog(`start v${app.getVersion()} data=${store.DATA_DIR} pid=${process.pid}`);
+
+    // ---- 开机动画窗口 ----
+    // 仿抖音 DSH 风格：Logo 渐显 + 进度条 + 状态文字。
+    // 首次安装时额外显示配置步骤介绍；非首次只显示精简动画。
+    // 安卓环境就绪后淡出关闭，应用秒进。
+    let splashWin = null;
+    const isFirstRun = !store.getSettings().runtime.installed;
+    try {
+      splashWin = new BrowserWindow({
+        width: 480, height: 360,
+        frame: false, transparent: false, resizable: false,
+        alwaysOnTop: true, skipTaskbar: true,
+        backgroundColor: '#0b0c0e',
+        show: false,
+        webPreferences: {
+          preload: path.join(__dirname, 'splash-preload.js'),
+          contextIsolation: true, nodeIntegration: false, sandbox: false,
+        },
+      });
+      splashWin.loadFile(path.join(__dirname, 'ui', 'splash.html'));
+      splashWin.once('ready-to-show', () => splashWin.show());
+      // IPC：版本号、首次运行标记、关闭
+      ipcMain.handle('splash:version', () => app.getVersion());
+      ipcMain.handle('splash:isFirstRun', () => isFirstRun);
+      ipcMain.on('splash:close', () => {
+        if (splashWin && !splashWin.isDestroyed()) splashWin.close();
+        splashWin = null;
+      });
+    } catch (e) {
+      appLog(`splash window failed: ${e.message}`);
+      splashWin = null;
+    }
+    // 辅助函数：向 splash 推送进度 / 完成信号
+    const splashProgress = (p) => {
+      if (splashWin && !splashWin.isDestroyed()) splashWin.webContents.send('splash:progress', p);
+    };
+    const splashDone = () => {
+      if (splashWin && !splashWin.isDestroyed()) splashWin.webContents.send('splash:done');
+    };
+
     const l = launcherInfo();
     installer = new Installer(runtime, {
       launcherTarget: l.target,
@@ -2079,6 +2129,12 @@ if (!gotLock) {
     const args = parseArgs(process.argv);
     if (args.apk) runInstall(args.apk).catch(() => {});
     else if (args.launch) await runLaunch(args.launch);
+    else {
+      // 没有直接启动应用：splash 在主窗口 ready 后淡出
+      if (typeof splashDone === 'function') {
+        setTimeout(() => splashDone(), 800);
+      }
+    }
 
     // 预热：像 WSA / 应用宝电脑版那样把安卓环境常驻。
     // 打开 ApkStart 时就在后台把它引导好（窗口全程隐藏），之后点应用只剩一次 am start。
