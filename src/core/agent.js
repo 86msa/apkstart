@@ -214,6 +214,13 @@ class WinAgent extends EventEmitter {
   async setTitle(text = 'ApkStart') {
     return this.call({ cmd: 'title', text: String(text || 'ApkStart') }, 4000);
   }
+  /**
+   * 给模拟器原生窗口设图标（独立窗口模式下任务栏/Alt+Tab 显示当前应用图标）。
+   * @param {string} file PNG/ICO 绝对路径
+   */
+  async setIcon(file) {
+    return this.call({ cmd: 'icon', file: String(file || '') }, 4000);
+  }
   async probe() { return this.call({ cmd: 'probe' }, 4000); }
   /** 列出当前可见的顶层窗口（用于验证「只有软件界面 / 只有安卓应用窗口」） */
   async windows() { return this.call({ cmd: 'windows' }, 4000); }

@@ -42,6 +42,10 @@ public class ApkAgent
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassNameW(IntPtr h, StringBuilder s, int n);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowTextW(IntPtr h, StringBuilder s, int n);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool SetWindowTextW(IntPtr h, string s);
+    // 给模拟器原生窗口设图标（独立窗口模式下任务栏/Alt+Tab 显示当前应用图标）
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr LoadImageW(IntPtr inst, string file, uint type, int w, int h, uint flags);
+    [DllImport("user32.dll")] static extern IntPtr SendMessageW(IntPtr h, uint msg, IntPtr wp, IntPtr lp);
+    [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr h);
     [DllImport("user32.dll")] static extern IntPtr SetParent(IntPtr c, IntPtr p);
     [DllImport("user32.dll")] static extern IntPtr GetParent(IntPtr c);
     [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h, int i);
@@ -276,6 +280,10 @@ public class ApkAgent
     // ApkStart 会把这个窗口的标题改成应用名（见 "title" 命令），所以识别时
     // 必须同时认「改名后的标题」。用一个 volatile 字段记住我们设过的标题。
     public static string _ourTitle = "";
+    // 应用图标文件路径：Qt 会在窗口重建时把图标改回默认绿机器人，巡检里持续补设。
+    public static string _ourIconFile = "";
+    public static IntPtr _ourIconSmall = IntPtr.Zero;
+    public static IntPtr _ourIconBig = IntPtr.Zero;
     static bool LooksLikeEmulator(string title)
     {
         if (title.IndexOf("Android Emulator", StringComparison.OrdinalIgnoreCase) >= 0) return true;
@@ -507,6 +515,14 @@ public class ApkAgent
             if (_ourTitle.Length > 0 && _emu != IntPtr.Zero
                 && !String.Equals(TitleOf(_emu), _ourTitle, StringComparison.Ordinal))
                 SetWindowTextW(_emu, _ourTitle);
+            // Qt 换分辨率/重建窗口后图标会回到默认绿机器人，每轮补设一次。
+            // WM_GETICON 非零说明当前窗口已有我们设的图标，跳过；否则重发缓存句柄。
+            if (_emu != IntPtr.Zero && (_ourIconSmall != IntPtr.Zero || _ourIconBig != IntPtr.Zero)
+                && SendMessageW(_emu, 0x007F, new IntPtr(1), IntPtr.Zero) == IntPtr.Zero)
+            {
+                if (_ourIconSmall != IntPtr.Zero) SendMessageW(_emu, 0x0080, new IntPtr(0), _ourIconSmall);
+                if (_ourIconBig != IntPtr.Zero) SendMessageW(_emu, 0x0080, new IntPtr(1), _ourIconBig);
+            }
             HideConsoleWindows();
             HideStrayWindows();
             return;
@@ -1226,6 +1242,36 @@ public class ApkAgent
                         _ourTitle = t;
                         if (_emu == IntPtr.Zero) _emu = FindEmulator();
                         bool ok = _emu != IntPtr.Zero && SetWindowTextW(_emu, t);
+                        Reply(sock, "{\"ok\":" + (ok ? "true" : "false") + "}");
+                    }
+                    else if (cmd == "icon")
+                    {
+                        // 给模拟器原生窗口设图标（独立窗口模式下任务栏/Alt+Tab 显示当前应用图标，
+                        // 而不是 Google 模拟器的默认绿机器人）。传 ICO/PNG 绝对路径。
+                        string f = S(line, "file");
+                        if (_emu == IntPtr.Zero) _emu = FindEmulator();
+                        bool ok = false;
+                        if (f.Length > 0 && System.IO.File.Exists(f))
+                        {
+                            // 缓存图标句柄：换应用时释放旧的、加载新的；巡检补设直接用缓存，
+                            // 不再每轮 LoadImage（那是磁盘 IO + GDI 对象泄漏）。
+                            if (!String.Equals(f, _ourIconFile, StringComparison.OrdinalIgnoreCase))
+                            {
+                                if (_ourIconSmall != IntPtr.Zero) DestroyIcon(_ourIconSmall);
+                                if (_ourIconBig != IntPtr.Zero) DestroyIcon(_ourIconBig);
+                                _ourIconSmall = LoadImageW(IntPtr.Zero, f, 1, 32, 32, 0x10);
+                                _ourIconBig = LoadImageW(IntPtr.Zero, f, 1, 64, 64, 0x10);
+                                if (_ourIconSmall == IntPtr.Zero) _ourIconSmall = _ourIconBig;
+                                if (_ourIconBig == IntPtr.Zero) _ourIconBig = _ourIconSmall;
+                                _ourIconFile = f;
+                            }
+                            if (_emu != IntPtr.Zero && (_ourIconSmall != IntPtr.Zero || _ourIconBig != IntPtr.Zero))
+                            {
+                                if (_ourIconSmall != IntPtr.Zero) SendMessageW(_emu, 0x0080, new IntPtr(0), _ourIconSmall);
+                                if (_ourIconBig != IntPtr.Zero) SendMessageW(_emu, 0x0080, new IntPtr(1), _ourIconBig);
+                                ok = true;
+                            }
+                        }
                         Reply(sock, "{\"ok\":" + (ok ? "true" : "false") + "}");
                     }
                     else if (cmd == "layout")

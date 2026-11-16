@@ -116,6 +116,9 @@ class AppWindow {
     this.close({ keepApp: true });
 
     this.pkg = pkg;
+    // 记住原始图标文件路径：独立窗口模式下要把它设给模拟器原生窗口（Win32
+    // LoadImage 只认文件路径，不认 HTML 用的 data URL）。
+    this.iconFilePath = iconPath || '';
     this.portrait = portrait || { w: 540, h: 960 };
     // 独立窗口模式下「全屏」要作用在模拟器窗口上（我们这层壳是隐藏的，
     // maximize 一个隐藏窗口没有任何视觉效果，openDetached 会读这个标记）。
@@ -293,6 +296,17 @@ class AppWindow {
     // 没有标签时退回 ApkStart。代理会在巡检里持续补设，防止 Qt 自己改回去。
     const title = this.state && this.state.label ? this.state.label : 'ApkStart';
     await this.agent.setTitle(title).catch(() => {});
+    // 图标也换成当前应用的：模拟器原生窗口默认是 Google 绿机器人，独立窗口模式
+    // 下任务栏/Alt+Tab 会露馅。Win32 LoadImage 对 .ico 支持最可靠（PNG 不一定认），
+    // installer 已为每个应用生成过同名 .ico，这里优先用它。
+    const icoForNative = this.iconFilePath
+      ? this.iconFilePath.replace(/\.png$/i, '.ico')
+      : '';
+    if (icoForNative && fs.existsSync(icoForNative)) {
+      try { await this.agent.setIcon(icoForNative); } catch (_) { /* ignore */ }
+    } else if (this.iconFilePath) {
+      try { await this.agent.setIcon(this.iconFilePath); } catch (_) { /* ignore */ }
+    }
     await sleep(300);
     // 按屏幕可用区居中和 sizing。
     // 注意：模拟器原生窗口自己按设备面板比例锁宽高比（竖屏 9:16），
@@ -312,7 +326,10 @@ class AppWindow {
       h = area.h;
       x = area.x;
       y = area.y;
+      // 同步全屏标记，否则第一次点「最大化」按钮会误判为「进入全屏」而不是还原。
+      this._detachedFullscreen = true;
     } else {
+      this._detachedFullscreen = false;
       const maxH = Math.min(area.h - 140, 1000);
       const maxW = Math.min(area.w - 80, 1280);
       w = maxW;
@@ -454,14 +471,54 @@ class AppWindow {
     return this.rotate();
   }
 
-  toggleMaximize() {
+  async toggleMaximize() {
     if (!this.isOpen) return;
+    // 独立窗口模式：画面在模拟器原生窗口里，壳窗口是隐藏的 —— maximize 一个隐藏
+    // 窗口没有任何视觉效果（这正是「右上角按钮点了没反应」的原因）。这里改成把
+    // 模拟器窗口铺满工作区 / 还原到默认尺寸。
+    if (this.detachedMode) {
+      const area = this._area();
+      if (this._detachedFullscreen) {
+        // 还原：回到按面板比例的居中默认尺寸
+        this._detachedFullscreen = false;
+        await this.openDetachedLayoutOnly(area);
+      } else {
+        this._detachedFullscreen = true;
+        await this.agent.layout({ x: area.x, y: area.y, w: area.w, h: area.h })
+          .catch(() => {});
+      }
+      return;
+    }
     if (this.win.isMaximized()) this.win.unmaximize();
     else this.win.maximize();
     this.scheduleFit();
   }
 
-  minimize() { if (this.isOpen) this.win.minimize(); }
+  /**
+   * 只重摆模拟器窗口尺寸（不重新 detach/show），供全屏/还原切换复用 openDetached
+   * 的尺寸计算逻辑。抽出来避免重复一遍 detach 流程。
+   */
+  async openDetachedLayoutOnly(area) {
+    const maxH = Math.min(area.h - 140, 1000);
+    const maxW = Math.min(area.w - 80, 1280);
+    const ratio = this._panelRatio();
+    let w = maxW;
+    let h = Math.round(w / ratio);
+    if (h > maxH) { h = maxH; w = Math.round(h * ratio); }
+    await this.agent.layout({
+      x: Math.round(area.x + (area.w - w) / 2),
+      y: Math.round(area.y + 60),
+      w, h,
+    }).catch(() => {});
+  }
+
+  minimize() {
+    if (!this.isOpen) return;
+    // 独立窗口模式：最小化的是模拟器原生窗口（agent.hide 会藏它），
+    // 而不是那个看不见的壳窗口。
+    if (this.detachedMode) { this.agent.hide().catch(() => {}); return; }
+    this.win.minimize();
+  }
 
   /**
    * 关闭窗口。默认同时停掉这个安卓应用（省内存），但保留引擎，下次点开是秒开。

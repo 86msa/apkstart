@@ -1817,14 +1817,10 @@ function registerIpc() {
   const winOf = (e) => BrowserWindow.fromWebContents(e.sender);
 
   ipcMain.handle('shell:state', () => ({ ...appWin.state, iconUrl: appWin.iconUrl || '' }));
-  ipcMain.handle('shell:minimize', (e) => winOf(e)?.minimize());
-  ipcMain.handle('shell:maximize', (e) => {
-    const w = winOf(e);
-    if (!w) return;
-    if (w.isMaximized()) w.unmaximize();
-    else w.maximize();
-    appWin.scheduleFit();
-  });
+  // 独立窗口模式下画面在模拟器原生窗口里，壳窗口是隐藏的 —— 按钮必须作用到真正
+  // 可见的那一扇。统一交给 appWin 判断模式处理，避免对隐藏窗口 maximize/minimize。
+  ipcMain.handle('shell:minimize', () => appWin.minimize());
+  ipcMain.handle('shell:maximize', () => appWin.toggleMaximize());
   // 关闭必须走 appWin.close()：它会先把模拟器窗口从宿主上摘下来、再停掉安卓应用。
   // 老实现直接 win.close()，绕过了这段收尾 —— 窗口是没了，但安卓侧的进程还在跑，
   // 就是用户说的「点关闭关不掉应用」。
