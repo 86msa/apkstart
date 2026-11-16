@@ -92,12 +92,21 @@ async function upload(releaseId, file, attempts = 3) {
       const res = await fetch(`${API}/releases/${releaseId}/attach_files`, { method: 'POST', body: fd });
       // eslint-disable-next-line no-await-in-loop
       const text = await res.text();
-      if (res.ok) return JSON.parse(text);
-      // 4xx（除 429）不值得重试：token 失效、文件名冲突之类重传也没用
-      if (res.status >= 400 && res.status < 500 && res.status !== 429) {
-        throw new Error(`上传 ${name} 失败：${res.status} ${text.slice(0, 200)}`);
+      if (res.ok) {
+        // Gitee 的 attach_files 有时会返回 200 + {"message": "..."} 而不是错误码，
+        // 直接 JSON.parse 当成功会让整步「成功但没传上去」（v0.5.0 就这么丢过包）。
+        // 所以必须确认响应里真的有附件对象，否则当成可重试的失败。
+        let j = null;
+        try { j = JSON.parse(text); } catch (_) { /* 空响应也当失败 */ }
+        if (j && (j.id || j.name)) return j;
+        lastErr = new Error(`接口返回 200 但没有附件信息：${text.slice(0, 160)}`);
+      } else {
+        // 4xx（除 429）不值得重试：token 失效、文件名冲突之类重传也没用
+        if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+          throw new Error(`上传 ${name} 失败：${res.status} ${text.slice(0, 200)}`);
+        }
+        lastErr = new Error(`${res.status} ${text.slice(0, 120)}`);
       }
-      lastErr = new Error(`${res.status} ${text.slice(0, 120)}`);
     } catch (e) {
       lastErr = e;
       if (/^上传 .* 失败/.test(e.message)) throw e;
@@ -192,6 +201,20 @@ async function upload(releaseId, file, attempts = 3) {
     // eslint-disable-next-line no-await-in-loop
     await upload(rel.id, f);
   }
+
+  // 回查一遍：接口返回成功不等于附件真的挂上去了（v0.5.0 就是这样「成功但没包」，
+  // 用户下到 404 才发现）。这里必须能在 attach_files 里看到同名附件，否则让整步失败。
+  console.log('4) 回查附件');
+  {
+    const list = await api('GET', `/releases/${rel.id}/attach_files`);
+    const have = new Set((Array.isArray(list) ? list : []).map((a) => a.name));
+    const missing = files.map((f) => path.basename(f)).filter((n) => !have.has(n));
+    if (missing.length) {
+      throw new Error(`上传后附件缺失：${missing.join(', ')}（现有：${[...have].join(', ') || '无'}）`);
+    }
+    console.log('   OK：' + files.map((f) => path.basename(f)).join(', '));
+  }
+
   for (const p of parts) fs.rmSync(p, { force: true });
   console.log(`\n完成：https://gitee.com/${OWNER}/${REPO}/releases/tag/${tag}`);
 })().catch((e) => {
