@@ -381,10 +381,21 @@ async function toggleDisplayMode() {
 
 /** 首次运行把 adb / emulator / 系统镜像一次装完，不再分 1~5 步 */
 let deploying = false;
-async function autoDeploy() {
+async function autoDeploy({ force = false } = {}) {
   if (deploying || !store.getSettings().autoDeploy) return { ok: false, error: 'skipped' };
+  // 下载失败冷却：以前只要 checkEnv() 还缺组件，每次启动 ApkStart 都会重新
+  // 拉一遍 1.5GB 的运行时包，用户看到的就是「一直重复下载」。
+  // 失败后记一个时间戳，30 分钟内不再自动重试；用户手动点「一键部署」时
+  // force=true 可以立刻重试。成功或人为强制都清掉冷却。
+  const COOLDOWN_MS = 30 * 60 * 1000;
+  const lastFail = Number(store.getSettings().runtime.deployFailedAt || 0);
+  if (!force && lastFail && Date.now() - lastFail < COOLDOWN_MS) {
+    appLog(`autoDeploy 冷却中（上次失败于 ${new Date(lastFail).toISOString()}），跳过自动重试`);
+    return { ok: false, error: 'cooldown', cooldown: true, until: lastFail + COOLDOWN_MS };
+  }
   deploying = true;
   const progress = (p) => send('provision:progress', { ...p, component: p.component || 'all' });
+  let succeeded = false;
   try {
     const env = await runtime.provisioner.checkEnv();
     const needEngine = !env.emulator.ok || !env.sysimg.ok;
@@ -396,7 +407,10 @@ async function autoDeploy() {
         progress({ message: '正在从 GitHub 下载运行时…' });
         await runtime.provisioner.installRuntimePack(progress);
         const afterPack = await runtime.provisioner.checkEnv();
-        if (afterPack.emulator.ok && afterPack.sysimg.ok) return { ok: true, source: 'github' };
+        if (afterPack.emulator.ok && afterPack.sysimg.ok) {
+          succeeded = true;
+          return { ok: true, source: 'github' };
+        }
         progress({ message: '运行时整包不完整，改用官方源补齐…' });
       } catch (e) {
         progress({ message: `GitHub 运行时不可用（${e.message}），改用官方源…` });
@@ -415,10 +429,15 @@ async function autoDeploy() {
       await runtime.provisioner.installSystemImage(progress);
     }
     const after = await runtime.provisioner.checkEnv();
-    return { ok: !!(after.adb.ok && after.emulator.ok && after.sysimg.ok) };
+    succeeded = !!(after.adb.ok && after.emulator.ok && after.sysimg.ok);
+    return { ok: succeeded };
   } catch (e) {
     return { ok: false, error: e.message };
   } finally {
+    // 只有「真失败」才进冷却；部署成功要把旧失败记录清掉。
+    try {
+      store.saveSettings({ runtime: { deployFailedAt: succeeded ? 0 : Date.now() } });
+    } catch (_) { /* 设置写不进去不影响本次结果 */ }
     deploying = false;
   }
 }
@@ -980,7 +999,8 @@ function registerIpc() {
   ipcMain.handle('display:toggle', () => toggleDisplayMode());
 
   ipcMain.handle('shortcut:rebuild', async () => ({ ok: true, fixed: await installer.ensureShortcuts() }));
-  ipcMain.handle('runtime:autoDeploy', () => autoDeploy());
+  // 用户手动点「一键部署」时强制重试，绕过失败冷却
+  ipcMain.handle('runtime:autoDeploy', (_e, opts = {}) => autoDeploy({ force: !!opts.force }));
   // 关闭「深度裁剪」时把被 pm disable-user 的系统包恢复回来
   ipcMain.handle('settings:restoreSystem', async () => runtime.restoreSystemApps());
   // 鼠标键位改变：只同步配置，不再无条件卸载（右键返回/滚轮可能仍需要钩子）

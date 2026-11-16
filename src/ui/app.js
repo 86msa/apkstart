@@ -378,7 +378,8 @@ async function deployAll() {
   setStepBusy('all', true);
   try {
     // 一次调用把 adb / 引擎 / 系统镜像全装完，进度统一显示在唯一那一行
-    const r = await api.autoDeploy();
+    // 用户点「一键部署」属于明确的手动重试，绕过失败冷却
+    const r = await api.autoDeploy({ force: true });
     if (!r || !r.ok) {
       toast({ title: '准备失败', body: (r && r.error) || '请检查网络后重试', type: 'error', sticky: true });
       return;

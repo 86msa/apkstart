@@ -913,13 +913,20 @@ class Runtime {
     const state = container.nextSessionState([...this._activeApps], 'open', pkg);
     const s = this.settings;
     const mode = (s.engine && s.engine.priorityMode) || 'balanced';
-    const level = mode === 'game' ? 'game'
-      : mode === 'performance' ? 'normal' : 'below';
+    // 有应用在前台时的调度级别。balanced 用 normal（不是 below）：
+    // below 会让 qemu 在系统繁忙时被饿到，表现为视频解码掉帧、点击要等一下才响应 ——
+    // 这正是「点击不跟手」的主因。normal 只是与桌面同档，并不额外吃 CPU/内存/GPU。
+    const level = mode === 'game' ? 'game' : 'normal';
 
     if (first) {
       // 有应用要开了：把「空闲存快照」推迟，别在应用启动时抢磁盘
       this.emulator.cancelSnapshotSave();
-      await this.emulator.setPriority(level).catch(() => {});
+    }
+    // 每次打开/切回应用都确保优先级到位：endApp 会把空闲的 qemu 降到 idle，
+    // 切换回来时若不重新提，就会停在低优先级 → 点起来发木。setPriority 幂等，
+    // 已经是目标值时脚本内部不改、开销极小。
+    await this.emulator.setPriority(level).catch(() => {});
+    if (first) {
       try { onActive(true); } catch (_) { /* 轮询启动失败不影响打开应用 */ }
     }
 

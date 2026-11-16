@@ -141,6 +141,13 @@ function chooseProfile({
   const accelOk = !!(accel && accel.ok);
   // 3GB 足够 Android 14 与主流应用；再高只会放大内存占用和 quickboot 快照体积
   let memoryMB = clamp(Math.floor((host.totalMB * 0.22) / 256) * 256, 2048, 3072);
+  // 「省资源」模式：刷视频/看小说这类轻负载用不到 3G，把上限压到 2G。
+  // 直接效果是 qemu 常驻内存少约 1GB、quickboot 快照也小 1GB（磁盘同步受益）。
+  // 只有用户没手动指定内存时才收敛，手动值永远优先。
+  const rmode = settings && settings.engine && settings.engine.resourceMode;
+  if (rmode === 'save' && !overrides.memoryMB) {
+    memoryMB = clamp(memoryMB, 2048, 2048);
+  }
   // 物理可用内存不够时下调；Android 14 最低 2G，低于此只能靠 TCG 慢速跑
   if (host.freeMB && host.freeMB < memoryMB + 1024) {
     memoryMB = Math.max(2048, Math.floor((host.freeMB * 0.5) / 256) * 256);

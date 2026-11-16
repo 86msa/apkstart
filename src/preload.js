@@ -48,7 +48,7 @@ contextBridge.exposeInMainWorld('apkstart', {
   displaySet: (patch) => invoke('display:set', patch || {}),
   displayToggle: () => invoke('display:toggle'),
   rebuildShortcuts: () => invoke('shortcut:rebuild'),
-  autoDeploy: () => invoke('runtime:autoDeploy'),
+  autoDeploy: (opts) => invoke('runtime:autoDeploy', opts || {}),
   startInstaller: () => invoke('runtime:startInstaller'),
   markInstalled: () => invoke('runtime:markInstalled'),
   resetInstall: () => invoke('runtime:resetInstall'),

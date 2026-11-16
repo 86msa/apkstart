@@ -517,6 +517,72 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(/opts\.enabled && !game/.test(aw), 'game 模式不能装 WH_MOUSE_LL 全局钩子');
   });
 
+  await test('前台应用优先级不能用 below（点击跟手 / 视频不掉帧）', () => {
+    const engJs = fs.readFileSync(path.join(__dirname, '..', 'src', 'core', 'engine.js'), 'utf8');
+    // balanced/performance 有应用在前台时必须是 normal：below 会让 qemu 被饿，
+    // 表现为视频解码掉帧、点击要等一下才响应（用户说的「点击不跟手」主因）。
+    const begin = engJs.slice(engJs.indexOf('async beginApp'));
+    assert(/mode === 'game' \? 'game' : 'normal'/.test(begin),
+      "beginApp 前台优先级应映射为 game→game、其余→normal");
+    assert(!/performance.*\? 'normal' : 'below'/.test(begin),
+      '不能再把 balanced 落到 below');
+    // setPriority 要在每次 beginApp 都执行，不只第一次（切换回来也要提权）
+    assert(begin.split('setPriority(level)').length >= 2 || /if \(first\)[\s\S]{0,200}cancelSnapshotSave[\s\S]{0,300}setPriority\(level\)/.test(begin),
+      'setPriority 要在每次 beginApp 都执行，不只第一次');
+  });
+
+  await test('省资源模式应下调内存上限（减运行占用）', () => {
+    const doc = fs.readFileSync(path.join(__dirname, '..', 'src', 'core', 'doctor.js'), 'utf8');
+    assert(/rmode === 'save'[\s\S]{0,120}2048/.test(doc),
+      'save 模式要把 memoryMB 压到 2048（省约 1GB 内存 + 1GB 快照磁盘）');
+    assert(/!overrides\.memoryMB/.test(doc), 'save 收敛内存要让位于用户手动值');
+  });
+
+  await test('下载失败必须删除残余文件（否则无限重复下载同一个包）', () => {
+    const dl = fs.readFileSync(path.join(__dirname, '..', 'src', 'core', 'download.js'), 'utf8');
+    assert(/function discardPartial/.test(dl), '需要 discardPartial');
+    assert(/chunks\.json/.test(dl), 'discardPartial 要连分块边车一起删');
+    // download / downloadParallel / downloadMulti 的失败路径都要调用它
+    const calls = (dl.match(/discardPartial\(/g) || []).length;
+    assert(calls >= 6, `失败清理点太少（只有 ${calls} 处），仍有路径会留半截文件`);
+    // 最外层兜底：openStream 直接 reject（连接被拒/DNS/超时）也要清
+    assert(/catch \(e\) \{[\s\S]{0,200}discardPartial\(dest\)[\s\S]{0,80}throw e;[\s\S]{0,40}\}[\s\S]{0,10}\}/.test(dl),
+      'download 最外层要兜住 openStream 的 reject');
+  });
+
+  await test('旧版本清理：能发现任意位置的 ApkStart 目录，且绝不碰当前运行版本', () => {
+    const os = require('os');
+    const leftovers = require('../src/core/leftovers');
+    const np = (p) => { try { return path.resolve(p).toLowerCase(); } catch (_) { return String(p).toLowerCase(); } };
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'apkstart-left-'));
+    try {
+      const mk = (name) => {
+        const d = path.join(root, name);
+        fs.mkdirSync(d, { recursive: true });
+        fs.writeFileSync(path.join(d, 'ApkStart.exe'), 'fake-exe');
+        return d;
+      };
+      const old1 = mk('ApkStart-v0.3.9-win64-portable');
+      const old2 = mk('ApkStart-win64-portable.prev-2026-01-01T00-00-00-000Z');
+      const curDir = mk('ApkStart-v0.5.0-win64-portable');
+      const r = leftovers.scan({ installDir: curDir, dataDir: root, avdHome: '' });
+      const found = r.items.filter((i) => i.kind === 'dir').map((i) => np(i.path));
+      assert(found.includes(np(old1)), '普通旧版本目录没被发现');
+      assert(found.includes(np(old2)), '.prev 打包备份残留没被发现');
+      assert(!found.includes(np(curDir)), '当前运行版本被当成旧版本（危险）');
+    } finally {
+      try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) { /* ignore */ }
+    }
+  });
+
+  await test('自动部署要有失败冷却（避免每次启动重下一遍）', () => {
+    const mainJs = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.js'), 'utf8');
+    assert(/deployFailedAt/.test(mainJs), '要记录上次部署失败时间');
+    assert(/COOLDOWN_MS|cooldown/.test(mainJs), '要有冷却窗口');
+    assert(/force/.test(mainJs.slice(mainJs.indexOf('async function autoDeploy'))),
+      '手动一键部署要能绕过冷却立即重试');
+  });
+
   await test('新版 emulator 写的 ram.bin 必须被认作完整快照（否则刚存好的 3GB 会被当空壳删掉）', () => {
     const { EmulatorEngine } = require('../src/core/emulator');
     const emu = new EmulatorEngine(path.join(__dirname, '..'));
