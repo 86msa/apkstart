@@ -47,17 +47,20 @@ async function api(method, p, body) {
   return json || {};
 }
 
-/** 切分大文件；返回切成后的路径数组 */
-function splitFile(file, limit) {
+/** 切分大文件；返回切成后的路径数组。
+ *  阈值是 HARD_LIMIT（100MiB，Gitee 真实上限），不是 PART_LIMIT ——
+ *  否则 99~100MiB 的包明明能整包上传，却会被白白切成分片，
+ *  手动下载的人还得按顺序拼接才能解压（这个脚本存在的意义就是避免这种包）。 */
+function splitFile(file, threshold, chunk = PART_LIMIT) {
   const size = fs.statSync(file).size;
-  if (size <= limit) return [];
+  if (size <= threshold) return [];
   const fd = fs.openSync(file, 'r');
   const out = [];
   try {
     let index = 1;
     let offset = 0;
     while (offset < size) {
-      const len = Math.min(limit, size - offset);
+      const len = Math.min(chunk, size - offset);
       const buf = Buffer.alloc(len);
       fs.readSync(fd, buf, 0, len, offset);
       const p = `${file}.part${index}`;
@@ -178,7 +181,7 @@ async function upload(releaseId, file, attempts = 3) {
       + '手动下载的人需要按顺序拼接才能解压，建议先用 `node build/zip.js` 压紧、或给包瘦身。');
   }
   console.log('3) 准备上传（整包优先，超限才切分）');
-  const parts = splitFile(zip, PART_LIMIT);
+  const parts = splitFile(zip, HARD_LIMIT, PART_LIMIT);
   const files = parts.length ? parts : [zip];
 
   // 同一个版本可能换过打包方式（整包 ↔ 分片）：把另一种形式的同名附件删掉，

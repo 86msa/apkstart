@@ -31,8 +31,12 @@ Package/Identity/Name       = RoutineMiku.ApkStart
 Package/Identity/Publisher  = CN=58CA1DED-8AB3-4D0D-AF50-62C9B781AA4D
 ```
 
-> 已确认（2026-11-16），包已按这两个值重打。除非 Partner Center 里显示的值与此不同，
-> 否则不需要再动。若日后名称或 Publisher 变更，重跑：
+> 已确认（2026-11-16），**这两个值已经是 `build/msix.js` 与 `electron-builder.yml`
+> 的默认值**，直接跑 `node build/msix.js` 打出来的就是正确身份。
+> 另外 `build/msix.js` 加了一道守卫：Publisher 里没有 `58CA1DED` 时直接退出（退出码 3），
+> 避免再用占位身份覆盖掉已经正确的包（此前 `dist/release/ApkStart 0.5.0.appx`
+> 就是这样被打成占位身份的废包）。
+> 若日后 Partner Center 里显示的值与此不同，重跑：
 >
 > ```powershell
 > node build/msix.js --identity "RoutineMiku.ApkStart" --publisher "CN=58CA1DED-8AB3-4D0D-AF50-62C9B781AA4D"

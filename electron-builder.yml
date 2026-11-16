@@ -52,11 +52,12 @@ win:
 # identityName / publisher 必须逐字等于 Partner Center →
 #   Product management → Product identity 里的
 #   Package/Identity/Name 与 Package/Identity/Publisher。
-# 换成自己的产品身份后再打商店包（也可以直接用环境变量覆盖，
-# 见 build/msix.js 的 APKSTART_MSIX_IDENTITY / APKSTART_MSIX_PUBLISHER）。
+# 下面这两个值是 2026-11-16 从 Partner Center 抄下来的确认值；
+# 换产品身份时改这里（或设 APKSTART_MSIX_IDENTITY / APKSTART_MSIX_PUBLISHER）。
+# 注意：占位 Publisher（CN=RoutineMiku）打出来的包商店会直接拒收。
 appx:
   identityName: RoutineMiku.ApkStart
-  publisher: "CN=RoutineMiku"
+  publisher: "CN=58CA1DED-8AB3-4D0D-AF50-62C9B781AA4D"
   publisherDisplayName: RoutineMiku
   displayName: ApkStart
   applicationId: ApkStart

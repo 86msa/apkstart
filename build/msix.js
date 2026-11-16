@@ -43,8 +43,14 @@ function msixVersion(v) {
   return `${p[0]}.${p[1]}.${p[2]}.0`;
 }
 
-const IDENTITY = arg('identity') || process.env.APKSTART_MSIX_IDENTITY || 'RoutineMiku.ApkStart';
-const PUBLISHER = arg('publisher') || process.env.APKSTART_MSIX_PUBLISHER || 'CN=RoutineMiku';
+// Partner Center → Product management → Product identity 里确认过的两个值。
+// 直接写成默认值：以前默认是占位 `CN=RoutineMiku`，任何人随手跑一次
+// `node build/msix.js` 就会把已经正确的包覆盖成一个商店必然拒收的包。
+const PLACEHOLDER_PUBLISHER = 'CN=RoutineMiku';
+const CONFIRMED_IDENTITY = 'RoutineMiku.ApkStart';
+const CONFIRMED_PUBLISHER = 'CN=58CA1DED-8AB3-4D0D-AF50-62C9B781AA4D';
+const IDENTITY = arg('identity') || process.env.APKSTART_MSIX_IDENTITY || CONFIRMED_IDENTITY;
+const PUBLISHER = arg('publisher') || process.env.APKSTART_MSIX_PUBLISHER || CONFIRMED_PUBLISHER;
 const PUBLISHER_DISPLAY = arg('publisherDisplay') || process.env.APKSTART_MSIX_PUBLISHER_DISPLAY || 'RoutineMiku';
 const DISPLAY = arg('display') || process.env.APKSTART_MSIX_DISPLAY || 'ApkStart';
 const APP_ID = arg('appId') || 'ApkStart';
@@ -370,7 +376,15 @@ function stagePackage() {
 
 function main() {
   console.log(`ApkStart MSIX 打包  版本 ${VERSION} → ${msixVersion(VERSION)}`);
-  console.log(`载荷目录 ${STAGE}`);
+  // 身份守卫：占位 Publisher 打出来的包商店一定拒收（0x800B0109 / 身份不匹配）。
+  // 光靠文档提醒没用 —— 默认值曾经就是占位值，一次随手重建就把好包覆盖掉了。
+  if (!String(PUBLISHER).toUpperCase().includes('58CA1DED') && !process.argv.includes('--allow-placeholder')) {
+    console.error(`\nPublisher 不是 Partner Center 确认过的值：${PUBLISHER}`);
+    console.error(`已确认值是 ${CONFIRMED_PUBLISHER}（Identity ${CONFIRMED_IDENTITY}）。`);
+    console.error('占位 Publisher 打出来的包上传时会被商店直接拒收。');
+    console.error('确实要打占位版（仅本地试验，不上架）就加 --allow-placeholder。\n');
+    process.exit(3);
+  }
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const work = stagePackage();
 
