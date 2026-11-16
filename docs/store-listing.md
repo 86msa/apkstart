@@ -142,13 +142,24 @@ First launch expands the bundled system image to %USERPROFILE%\ApkStart\data
 
 建议顺序：
 
-1. 主界面（应用列表 + 已安装应用卡片）
-2. 一个竖屏应用正在运行（红果短剧）
-3. 一个横屏应用正在运行（墨读）
-4. 安装 APK 的瞬间（拖入 / 双击后自动解析）
+1. 主界面（已装应用卡片）
+2. 竖屏应用正在运行（体现独立窗口与铺满）
 
-> 现有 `docs/images/app.png` 等是 1140×740，**不满足** 1366×768 下限，
-> 需要按 `docs/store-msix.md` 第 6 节重新截 1920×1080。
+**已生成，可直接上传**（1920×1080，满足 1366×768 下限）：
+
+| 文件 | 主题 |
+|---|---|
+| `docs/store-shots/1-main.png` | 双击 APK，即刻运行 |
+| `docs/store-shots/2-window.png` | 每个应用都是独立窗口 |
+
+重新生成：
+
+```powershell
+npx electron build/store-shots.js
+```
+
+脚本只做「真实界面 + 背景 + 文案」的构图，不修改界面本身。
+原始截图 `raw-*.png` 由应用的 `--smoke` 截图模式产出（1920×1032）。
 
 ---
 
