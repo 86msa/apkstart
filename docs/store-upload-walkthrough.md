@@ -120,9 +120,11 @@ Windows 10 version 2004 (build 19041) or later, x64. "Virtual Machine Platform"
 (Windows Hypervisor Platform) must be enabled for hardware acceleration.
 8 GB RAM recommended; ~4 GB free disk space for the system image.
 ```
-- **Privacy policy URL**：你的 `docs/privacy.md` 公开地址
-  > 注意：该文件目前在 `feat/pluggable-backend` 分支。要么合并到默认分支，
-  > 要么用 Pages 托管，否则审核员打开是 404。
+- **Privacy policy URL** **[复制]**
+  ```
+  https://github.com/RoutineMiku/apkstart/blob/main/docs/privacy.md
+  ```
+  （已合入 `main`，无需再处理分支可见性）
 - **Support contact**：填你的邮箱 + `https://github.com/RoutineMiku/apkstart/issues`
 
 ---
