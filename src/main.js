@@ -2281,6 +2281,12 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     store.ensureDirs();
+    // Windows 任务栏身份（AppUserModelID）
+    // 不设的话 Windows 只能按 exe 路径猜身份：任务栏固定项、跳转列表、通知来源
+    // 都会落到 "Electron" 上 —— 用户看到的就是「图标/名字是默认的那个」。
+    // 这里和快捷方式（installer.createShortcut 里的 RoutineMiku.ApkStart.<pkg>）
+    // 保持同一个前缀，主窗口与「ApkStart」这个应用才归得到一起。
+    try { app.setAppUserModelId('RoutineMiku.ApkStart'); } catch (_) { /* 非 Windows 忽略 */ }
     runtime = new Runtime(APP_ROOT);
     // 启动即留一行痕迹：出问题时用户把 app.log 发过来就能看到版本与数据目录
     appLog(`start v${app.getVersion()} data=${store.DATA_DIR} pid=${process.pid}`);

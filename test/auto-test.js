@@ -2547,6 +2547,52 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
       '软件模拟要提醒一次');
   });
 
+  await test('打包必须写入 exe 图标/版本，否则资源管理器显示 Electron 默认图标', () => {
+    const root = path.join(__dirname, '..');
+    const packJs = fs.readFileSync(path.join(root, 'build', 'pack.js'), 'utf8');
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    const pkg = require(path.join(root, 'package.json'));
+
+    // 直改名出来的 exe 里面还是 Electron：FileDescription=Electron、
+    // ProductName=Electron、CompanyName=GitHub, Inc.、版本 33.4.11，图标也是默认的。
+    assert(/function embedExeMeta\(exe\)/.test(packJs), '要有 exe 元信息写入步骤');
+    assert(/--set-icon/.test(packJs), '要写图标');
+    assert(/--set-file-version/.test(packJs), '要写文件版本');
+    assert(/--set-version-string', 'FileDescription'/.test(packJs), '要写 FileDescription');
+    assert(/--set-version-string', 'ProductName', 'ApkStart'/.test(packJs), 'ProductName 必须是 ApkStart');
+    assert(/embedExeMeta\(exePath\)/.test(packJs), '要在改名之后真的调用');
+    // 找不到 rcedit 时要明确告警，不能静默产出「Electron 图标」的包
+    assert(/找不到 rcedit\.exe/.test(packJs), '缺 rcedit 要告警');
+
+    // 任务栏身份：不设 AppUserModelID，任务栏固定项/通知会落到 "Electron" 上
+    assert(/app\.setAppUserModelId\('RoutineMiku\.ApkStart'\)/.test(mainJs),
+      '启动时要设置 AppUserModelID');
+
+    // 完整版（含运行时）作为一个可交付版本
+    assert(/--full/.test(packJs) && /ApkStart-v\$\{PKG\.version\}-win64-full/.test(packJs),
+      '--full 要产出带版本号的完整版目录');
+    assert(/build', 'runtime'/.test(packJs), '完整版要内置 build/runtime');
+  });
+
+  await test('版本统一：package.json / MSIX 四段号 / 文档包名一致', () => {
+    const root = path.join(__dirname, '..');
+    const pkg = require(path.join(root, 'package.json'));
+    const { msixVersion } = require(path.join(root, 'build', 'msix.js'));
+    const four = msixVersion(pkg.version);
+    assert(/^\d+\.\d+\.\d+\.0$/.test(four), `MSIX 四段版本号格式不对：${four}`);
+    const artifact = `ApkStart_${four}_x64.msix`;
+    for (const f of ['docs/store-listing.md', 'docs/store-msix.md', 'docs/store-upload-walkthrough.md']) {
+      const t = fs.readFileSync(path.join(root, f), 'utf8');
+      assert(t.includes(artifact), `${f} 里应引用当前版本的包名 ${artifact}`);
+    }
+    // exe 的文件版本也要用同一个号（四段），别和 package.json 各说各话
+    const packJs = fs.readFileSync(path.join(root, 'build', 'pack.js'), 'utf8');
+    assert(/\$\{PKG\.version\}\.0/.test(packJs), 'exe 文件版本要跟 package.json 对齐');
+    // 商店包和 exe 用的是同一个版本来源，不该有第二份硬编码版本号
+    const msixJs = fs.readFileSync(path.join(root, 'build', 'msix.js'), 'utf8');
+    assert(/const VERSION = String\(pkg\.version/.test(msixJs), 'MSIX 版本号必须取自 package.json');
+  });
+
   console.log(results.join('\n'));
   console.log(`\n结果：${passed} 通过，${failed} 失败\n`);
   try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (_) { /* ignore */ }
