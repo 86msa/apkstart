@@ -454,15 +454,6 @@ async function restartForOrientation(landscape, { reloadApp = true } = {}) {
  */
 async function attachAppWindow() {
   if (!appWin || !appWin.isOpen) return false;
-  // 有些底座自己没有可嵌的画面窗口（典型：FydeOS —— 画面在它自己的桌面里，
-  // 或者在那台虚拟机的窗口里，不是某个安卓应用的 HWND）。
-  // 这种情况不要走嵌入/独立窗口那一套，否则会兜一圈 SetParent 失败、
-  // 日志里刷「attach failed」，用户还以为坏了。直接认作「画面已由底座自己显示」。
-  const be = runtime && runtime.backend;
-  if (be && be.embedCapable === false) {
-    appLog(`${be.label} 自己管理画面窗口，跳过接管`);
-    return true;
-  }
   const embedMode = displaySettings().windowEmbed !== false;
   if (!embedMode) {
     // 独立窗口不需要标题栏里那块区域了，直接让模拟器窗口自己露出来
@@ -1073,8 +1064,7 @@ async function launchOne(pkg) {
         const cur = runtime.emulator && typeof runtime.emulator.panelLandscape === 'function'
           ? runtime.emulator.panelLandscape()
           : null;
-        const isBuiltin = !runtime.backend || runtime.backend.id === 'builtin';
-        if (cur !== null && cur !== wantLand && isBuiltin) {
+        if (cur !== null && cur !== wantLand) {
           mark(`orientation mismatch (panel=${cur ? 'landscape' : 'portrait'}, want=${wantLand}) 重启校正`);
           appWin.setState({ tip: wantLand ? '正在切换到横屏…' : '正在切换到竖屏…' });
           // restartForOrientation 重启运行时后返回新的 rt（旧 client 已失效）。
@@ -1093,25 +1083,6 @@ async function launchOne(pkg) {
       },
     });
     mark('app started');
-
-    // 1.5) 第三方底座的就绪门禁：等画面窗口真正出现在桌面上再嵌。
-    //      自带的 emulator 窗口是自己创建的，嵌完由代理负责显示；
-    //      而 MuMu 这类窗口不是我们创建的 —— 在它还隐藏时 SetParent，
-    //      Windows 会隐式清掉 WS_VISIBLE，之后它永远不会自己再显示（宿主里全黑）。
-    const backend = runtime.backend;
-    // 不能嵌窗口的底座（FydeOS）没有「等画面窗口出现」这回事，直接跳过这个门禁
-    if (backend && backend.id !== 'builtin' && backend.embedCapable !== false
-      && typeof backend.windowReady === 'function') {
-      const ready = await backend.windowReady({
-        isEmbedded: () => !!(appWin && appWin.lastEmbedOk),
-      }).catch((e) => ({ ok: false, reason: e.message }));
-      mark(`windowReady=${ready && ready.ok}${ready && ready.reason ? `(${ready.reason})` : ''}`);
-      if (!ready || !ready.ok) {
-        // 拿不到窗口也别把应用窗口晾着：给用户一句能看懂的话
-        appWin.setState({ tip: `等待 ${backend.label} 的画面窗口…` });
-        await new Promise((r) => setTimeout(r, 1200));
-      }
-    }
 
     // 2) 应用真的活下来了，才把画面接到用户眼前（否则用户会看到闪一下的桌面/崩溃页）
     // 但如果 onAppUp 已经把画面接上了（提前接管），这里只做一次「确认」，不重复接 ——
@@ -1403,11 +1374,6 @@ function registerIpc() {
       if (c.mb > 0) eng.autoMemory = false;
     }
     if ('cores' in eng) eng.cores = res.clampCores(eng.cores, host.cores).cores;
-    if ('mumuMemoryGB' in eng) {
-      const c = res.clampMemoryMB(Number(eng.mumuMemoryGB) * 1024, host.totalMB);
-      eng.mumuMemoryGB = c.mb > 0 ? Math.round((c.mb / 1024) * 2) / 2 : 0;
-    }
-    if ('mumuCores' in eng) eng.mumuCores = res.clampCores(eng.mumuCores, host.cores).cores;
     if ('dataPartitionGB' in eng) {
       eng.dataPartitionGB = Math.max(0, Math.min(256, Number(eng.dataPartitionGB) || 0));
     }
@@ -1446,34 +1412,7 @@ function registerIpc() {
         runtime?.provisioner?.invalidateEnvCache?.();
       } catch (_) { /* ignore */ }
     }
-    // 换了底座：旧后端的连接 / 端口假设全部作废，正在跑的应用窗口也要收起。
-    // 不处置的话，新底座会用上一个后端的 serial 去 adb，表现成「点开应用没反应」。
-    if (patch && patch.engine && ('mode' in patch.engine || 'mumuPath' in patch.engine || 'mumuIndex' in patch.engine)) {
-      try {
-        if (appWin && appWin.isOpen) appWin.close({ keepApp: false });
-        runtime?.resetBackend?.();
-        deviceSize.value = null;
-        send('runtime:log', `已切换运行时底座：${runtime.backend.label}`);
-      } catch (_) { /* ignore */ }
-    }
     return next;
-  });
-
-  /** 底座清单 + 本机探测结果（设置页「引擎模式」用） */
-  ipcMain.handle('backend:list', async () => {
-    const backends = require('./core/backends');
-    const out = [];
-    for (const d of backends.describe()) {
-      let probe = { ok: false, found: false };
-      try {
-        const Cls = backends.byId(d.id);
-        const inst = new Cls(APP_ROOT, { runtime, store, log: (l) => appLog(`  backend ${l}`) });
-        // eslint-disable-next-line no-await-in-loop
-        probe = await inst.probe();
-      } catch (e) { probe = { ok: false, found: false, detail: e.message }; }
-      out.push({ ...d, found: !!probe.found, path: probe.path || '', detail: probe.detail || '' });
-    }
-    return { current: runtime.backendId, list: out };
   });
 
   /**
@@ -1694,14 +1633,13 @@ function registerIpc() {
 
   /**
    * 资源分配总览：宿主上限、当前分配、数据盘余量。
-   * 自带运行时与 MuMu 的落点不同（qemu 参数 vs performance_* 配置），
-   * 这里统一由各底座自己的 resources() 回答，界面只认这个结构。
+   * 由运行时自己的 resources() 回答，界面只认这个结构。
    */
   ipcMain.handle('engine:resources', async () => {
     try {
       const backend = runtime.backend;
       if (backend && typeof backend.resources === 'function') return await backend.resources();
-      return { backend: backend ? backend.id : '', ok: false, note: '当前底座不支持资源分配' };
+      return { backend: backend ? backend.id : '', ok: false, note: '运行时未就绪，暂时读不到资源分配' };
     } catch (e) {
       return { ok: false, error: e.message };
     }
@@ -1714,9 +1652,6 @@ function registerIpc() {
   ipcMain.handle('runtime:resetAndResize', async (_e, gb) => {
     const res = require('./core/resources');
     const doctor = require('./core/doctor');
-    if (runtime.backend && runtime.backend.id !== 'builtin') {
-      return { ok: false, unsupported: true, error: '当前底座的数据盘由模拟器自己管理。' };
-    }
     const freeMB = doctor.freeDiskMB(runtime.provisioner.paths().root);
     const want = res.clampDataGB(gb, freeMB).gb;
     if (!want) return { ok: false, error: '目标容量不合法' };
@@ -1739,17 +1674,6 @@ function registerIpc() {
   });
 
   ipcMain.handle('runtime:setDataSize', async (_e, gb) => {
-    // 第三方底座的数据盘归它自己管（MuMu 的 CLI 没有改容量的接口），
-    // 这里不能拿 ApkStart 自己的 userdata 镜像去「扩容」，否则改的是一份根本没人用的文件。
-    if (runtime.backend && runtime.backend.id !== 'builtin') {
-      const info = runtime.backend.dataInfo ? runtime.backend.dataInfo() : {};
-      return {
-        ok: false,
-        unsupported: true,
-        error: '当前底座的数据盘由模拟器自己管理，请在模拟器设置中心里扩容。',
-        ...info,
-      };
-    }
     const res = require('./core/resources');
     const doctor = require('./core/doctor');
     const freeMB = doctor.freeDiskMB(runtime.provisioner.paths().root);
@@ -2473,7 +2397,7 @@ if (!gotLock) {
       isDev: IS_DEV,
       desktopDir: app.getPath('desktop'),
       // Windows 搜索索引的是开始菜单里的 .lnk，只放桌面会「搜不到应用」；
-      // Linux（FydeOS）那边对应的是 freedesktop 的应用菜单目录。
+      // Linux 那边对应的是 freedesktop 的应用菜单目录。
       startMenuDir: process.platform === 'win32'
         ? path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs')
         : path.join(process.env.HOME || app.getPath('home'), '.local', 'share', 'applications'),
@@ -2526,15 +2450,8 @@ if (!gotLock) {
       },
       // 传 getter：设置页改了键位，下一次窗口 focus / 刷新就生效，不用重启
       pointerConfig: () => pointer.pointerOptions(store.getSettings()),
-      // 底座决定「画面窗口从哪来」：自带底座返回 null（窗口代理自己按进程作用域找），
-      // MuMu 这类第三方底座每次都现取句柄（句柄会在设备进程重启后失效）。
-      windowTargets: () => {
-        try {
-          const b = runtime.backend;
-          if (!b || b.id === 'builtin') return null;
-          return b.windowTargets();
-        } catch (_) { return null; }
-      },
+      // 画面窗口由窗口代理按进程作用域自己找（自带 emulator 的窗口就是我们拉起来的）
+      windowTargets: () => null,
     });
     appWin.onCloseApp((pkg) => {
       // 关窗口 = 停这个应用；最后一个窗口关掉时容器停放（降优先级、停轮询），
@@ -2549,17 +2466,10 @@ if (!gotLock) {
     // 「哪些窗口才算我们的」= 运行时目录 + 随包的 engine 目录。
     // 窗口代理只允许碰这些进程创建的窗口 —— 别的 Qt 应用（微信 4.x 就是 Qt6，
     // 窗口类名和模拟器一模一样）一个都不许动，见 agent.ps1 的 SetScope。
-    // 第三方底座（MuMu 等）：把它的安装目录也加进来，这样开机阶段那个设备窗口
-    // 会被一起压住（只压 Qt 弹窗体/Chrome 工具条这类安全类名，见 HideStrayWindows）；
-    // 它的画面窗口嵌进宿主后不受影响。
     const agentScope = () => {
       const dirs = [];
       try { dirs.push(runtime.provisioner.root); } catch (_) { /* ignore */ }
       try { dirs.push(path.join(APP_ROOT, 'engine')); } catch (_) { /* ignore */ }
-      try {
-        const b = runtime.backend;
-        if (b && b.id !== 'builtin' && b.root) dirs.push(b.root);
-      } catch (_) { /* ignore */ }
       return dirs.filter(Boolean);
     };
     // 范围存在代理进程的内存里，代理一重建就没了 —— 所以每次开机压制前都重发一次。

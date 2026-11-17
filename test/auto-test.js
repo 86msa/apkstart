@@ -957,15 +957,12 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(!/w:\s*Math\.min\(area\.w - 80, 1280\)/.test(appwinJs), '不能再写死 1280 宽（会被模拟器夹成竖条）');
   });
 
-  await test('后端自动选择：builtin 永远优先，不能被装过的第三方模拟器顶掉', () => {
+  await test('只有一个运行时：注册表固定 builtin，装了什么模拟器都不影响', () => {
     const backends = require('../src/core/backends');
-    // 用户装了 MuMu 不代表要用它：auto 模式下必须是我们自己的运行时。
-    // 之前 mumu 排第一，导致启动后根本没开自己的模拟器、嵌入全失败。
-    const order = backends.AUTO_ORDER;
-    assert(Array.isArray(order), 'AUTO_ORDER 应该是个数组');
-    // Windows 上 builtin 必须第一；非 Windows（FydeOS）没有 emulator.exe，fydeos 才合理
-    const expectFirst = process.platform === 'win32' ? 'builtin' : 'fydeos';
-    assert(order[0] === expectFirst, `auto 模式第一应该是 ${expectFirst}，实际是 ${order[0]}`);
+    // 0.5.6 起不再有自动挑选：不管本机装了 MuMu / 雷电 / 蓝叠 / WSA，
+    // 都只跑 ApkStart 自己的运行时，只按设置读也不会有第二个候选。
+    assert(backends.REGISTRY.length === 1, '注册表里出现了第二个底座');
+    assert(backends.REGISTRY[0].id === 'builtin', '唯一底座不是 builtin');
   });
 
   await test('窗口标题改 ApkStart：识别逻辑必须同时认新标题', () => {
@@ -1266,62 +1263,6 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
 
     // 存活观察期本身不能删：它是防「闪一下就崩」的兜底
     assert(/aliveSince >= 4000/.test(instJs), '4 秒存活观察期要保留（防闪崩）');
-  });
-
-  await test('FydeOS 底座：Windows 也能用，但不嵌窗口、不假装能开机', async () => {
-    const { FydeosBackend, splitHost, detectVmHost } = require('../src/core/backends/fydeos');
-    const b = new FydeosBackend(path.join(__dirname, '..'), {});
-
-    assert(b.id === 'fydeos', 'id 必须是 fydeos（会写进设置，不能改）');
-    // FydeOS 的画面在它自己的桌面里（或虚拟机窗口里），不是某个安卓应用的 HWND。
-    // 硬说能嵌会让上层去 SetParent 一个空句柄。
-    assert(FydeosBackend.embedCapable === false, 'FydeOS 不能窗口嵌入');
-    assert((await b.windowTargets()).length === 0, '不能返回假的窗口句柄');
-
-    // 安卓是系统的一部分：不能提供「装镜像 / 存快照 / 改面板方向」这些能力
-    assert(!b.has('provision'), 'FydeOS 不需要也不能部署镜像');
-    assert(!b.has('snapshot'), 'FydeOS 没有我们自己的快照');
-    assert(!b.has('rotatePanel'), '面板方向由系统管');
-
-    // Windows 上必须能连「跑在虚拟机里的 FydeOS」，而不是一律拒绝。
-    // 关键：Windows 没有本机安卓，所以地址必须让用户填，且提示要能照着做。
-    if (process.platform === 'win32') {
-      const noHost = await b.check();
-      // 开发机上可能真跑着一台 adb 设备（本机模拟器 / 手机），这时 check() 合理地
-      // 返回 ok:true。我们只验证「没有因为平台不对而拒绝」，不断言一定失败。
-      assert(!/只能在 FydeOS/.test(noHost.reason || ''),
-        'Windows 上不该以「平台不对」为由一律拒绝');
-      if (!noHost.ok) {
-        assert(/地址/.test(noHost.reason) || /adb/i.test(noHost.reason),
-          '没填地址时要提示去填地址（或先把 adb 部署好）');
-      }
-
-      // 填了地址之后就不该再因为「平台不对」被拒
-      const { execFileSync } = require('child_process');
-      let adbExists = false;
-      try { execFileSync('where', ['adb'], { timeout: 3000, windowsHide: true }); adbExists = true; } catch (_) { /* ignore */ }
-      const b2 = new FydeosBackend(path.join(__dirname, '..'), {});
-      b2.hostOverride = '127.0.0.1:5555';
-      b2.adbPath = adbExists ? 'adb' : path.join(__dirname, '..', 'runtime', 'platform-tools', 'adb.exe');
-      const withHost = await b2.check();
-      assert(!/只能在 FydeOS/.test(withHost.reason || ''),
-        'Windows 上填了地址就不该再以「平台不对」为由拒绝');
-    }
-
-    // host:port 解析要稳（端口不写默认 5555；IPv6 方括号也要能吃）
-    assert(splitHost('127.0.0.1:5555').port === 5555);
-    assert(splitHost('192.168.1.7').port === 5555, '不写端口时默认 5555');
-    assert(splitHost('192.168.1.7').host === '192.168.1.7');
-    assert(splitHost('[::1]:5555').host === '::1', 'IPv6 方括号要正确解析');
-    assert(splitHost('') === null, '空字符串返回 null');
-
-    // 探测不能抛异常（autoPick 会直接调它）
-    const p = await b.probe();
-    assert(p && typeof p.found === 'boolean', 'probe 必须返回 {found:boolean}');
-    if (process.platform === 'win32') {
-      const vm = detectVmHost();
-      assert(vm && typeof vm.found === 'boolean', 'detectVmHost 不能抛异常');
-    }
   });
 
   await test('虚拟机联网：AVD 必须开虚拟 Wi-Fi，且能主动重连「不会自动连」的热点', () => {

@@ -13,8 +13,7 @@ const fs = require('fs');
 const path = require('path');
 const {
   hostProfile, memoryLimits, clampMemoryMB, clampCores, memVerdict,
-  diskRequiredMB, diskLimits, clampDataGB, storageVerdict,
-  mumuResourcePairs, parseMumuResources,
+  diskRequiredMB, diskVerdict, diskLimits, clampDataGB, storageVerdict,
 } = require('../src/core/resources');
 
 let passed = 0;
@@ -151,59 +150,31 @@ const GB = 1024 * 1024 * 1024;
     assert.equal(storageVerdict(0, 50 * GB).ok, true);
   });
 
-  console.log('\n[资源分配 · MuMu 落点]');
+  console.log('\n[资源分配 · 磁盘预检]');
 
-  test('都填 0 时不动 MuMu 的任何配置', () => {
-    assert.deepEqual(mumuResourcePairs(0, 0), []);
+  test('diskVerdict 空间够时放行', () => {
+    const v = diskVerdict(200 * 1024, 100 * 1024);
+    assert.equal(v.ok, true);
+    assert.equal(v.message, '');
   });
 
-  test('只填内存也要切到 custom 模式', () => {
-    const p = mumuResourcePairs(8, 0);
-    assert.deepEqual(p.map((x) => x.key), ['performance_mode', 'performance_mem.custom']);
-    assert.equal(p[0].value, 'custom');
-    assert.equal(p[1].value, '8.000000');
+  test('diskVerdict 空间不够时给出差多少（提示运行时所在磁盘）', () => {
+    const v = diskVerdict(10 * 1024, 60 * 1024);
+    assert.equal(v.ok, false);
+    assert.ok(/磁盘空间不足/.test(v.message), v.message);
+    assert.ok(/ApkStart 运行时所在磁盘/.test(v.message), v.message);
   });
 
-  test('只填核心时不动内存', () => {
-    const p = mumuResourcePairs(0, 6);
-    assert.deepEqual(p.map((x) => x.key), ['performance_mode', 'performance_cpu.custom']);
-    assert.equal(p[1].value, '6');
+  test('diskVerdict 读不到剩余空间时不拦', () => {
+    assert.equal(diskVerdict(0, 60 * 1024).ok, true);
   });
 
-  test('内存按 0.5GB 对齐、核心封顶 16（MuMu 自己的上限）', () => {
-    const p = mumuResourcePairs(7.3, 32);
-    const mem = p.find((x) => x.key === 'performance_mem.custom');
-    const cpu = p.find((x) => x.key === 'performance_cpu.custom');
-    assert.equal(mem.value, '7.500000');
-    assert.equal(cpu.value, '16');
-  });
-
-  test('parseMumuResources 读出性能模式与实际分配', () => {
-    const r = parseMumuResources({
-      performance_mode: 'custom', vm_mem: '9', vm_cpu: '6',
-      'performance_mem.custom': '7.500000', 'performance_cpu.custom': '4',
-    });
-    assert.equal(r.mode, 'custom');
-    assert.equal(r.memoryGB, 9);
-    assert.equal(r.cores, 6);
-    assert.equal(r.customMemoryGB, 7.5);
-    assert.equal(r.customCores, 4);
+  test('50GB 级安装包的预检空间按 1.8 倍 + 2GB 估', () => {
+    const need = diskRequiredMB(50 * GB);
+    assert.ok(need > 85 * 1024 && need < 95 * 1024, `需要 ${need} MB`);
   });
 
   console.log('\n[资源分配 · 接线检查]');
-
-  const storeSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'core', 'store.js'), 'utf8');
-  test('设置里持久化 MuMu 内存/CPU 分配', () => {
-    assert(/mumuMemoryGB: 0/.test(storeSrc), 'store 缺少 mumuMemoryGB');
-    assert(/mumuCores: 0/.test(storeSrc), 'store 缺少 mumuCores');
-  });
-
-  const mumuSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'core', 'backends', 'mumu.js'), 'utf8');
-  test('MuMu 后端在开机前应用内存/CPU 分配', () => {
-    assert(/applyResources\(alloc/.test(mumuSrc), 'ensure() 未应用资源分配');
-    assert(/mumuResourcePairs/.test(mumuSrc), 'mumu 后端未使用统一的分配翻译');
-    assert(/async resources\(\)/.test(mumuSrc), 'mumu 后端缺少 resources()');
-  });
 
   const builtinSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'core', 'backends', 'builtin.js'), 'utf8');
   test('自带底座也提供 resources()', () => {
@@ -214,8 +185,8 @@ const GB = 1024 * 1024 * 1024;
   test('主进程收敛越界值并暴露资源总览', () => {
     assert(/sanitizeResourcePatch/.test(mainSrc), '保存设置时未收敛资源值');
     assert(/engine:resources/.test(mainSrc), '缺少 engine:resources IPC');
-    assert(/unsupported: true/.test(mainSrc), '第三方底座的数据分区扩容未拦掉');
     assert(/runtime:resetAndResize/.test(mainSrc), '缺少重置+按新容量重建的通道');
+    assert(!/mumuMemoryGB|mumuCores/.test(mainSrc), '主进程仍残留第三方底座的内存收敛逻辑');
   });
 
   const emulatorSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'core', 'emulator.js'), 'utf8');

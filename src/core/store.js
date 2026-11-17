@@ -38,17 +38,9 @@ const DEFAULT_SETTINGS = {
   adbPath: '',
   device: '127.0.0.1:5555',
   engine: {
-    mode: 'builtin',         // builtin（自带运行时，默认） | mumu（复用已装的 MuMu 模拟器） | fydeos（FydeOS 自带安卓子系统） | attach（连接已有运行时，高级）
-    mumuPath: '',            // MuMu 安装目录（留空 = 自动按注册表 / 常见路径查找）
-    mumuIndex: 0,            // MuMu 多开实例索引，默认 0 号
-    // 黑屏自愈找到的可用渲染档位（dx-high / vk-high / dx-mid / ...）；空 = 自动挑选
-    mumuRenderProfile: '',
-    // MuMu 实例的内存 / CPU 分配（用户可自行指定）。
-    // 0 = 沿用 MuMu 里原来的性能设置，不动用户的模拟器配置；
-    // >0 时开机前写 performance_mode=custom + performance_mem.custom / performance_cpu.custom。
-    mumuMemoryGB: 0,
-    mumuCores: 0,
-    fydeosHost: '',          // FydeOS 安卓子系统地址（留空 = 依次试 arc:5555 / 100.115.92.2:5555 / 127.0.0.1:5555）
+    // 只有一个运行时：自带运行时（builtin）。字段保留是为了兼容老 settings.json 的合并，
+    // 读设置时会被强制写回 'builtin'（见 getSettings 的迁移）。
+    mode: 'builtin',
     qemuPath: '',
     systemImage: '',
     memoryMB: 0,             // 0 = 由 doctor 按机器内存自动决定
@@ -251,6 +243,17 @@ const store = {
 
   getSettings() {
     const s = deepMerge(DEFAULT_SETTINGS, readJson(SETTINGS_FILE, {}));
+    /**
+     * 0.5.6 起没有第三方底座了：老配置里的 mode=mumu / fydeos / attach，
+     * 或者手改出来的任何其它值，一律当 builtin 处理，并把残留的第三方字段删掉。
+     *
+     * 只在读的时候改内存里的对象，不立刻回写磁盘：设置文件是用户的，等他下次
+     * 保存设置时自然落盘；这样「打开一次 ApkStart 就改了他的 settings.json」不会发生。
+     */
+    s.engine.mode = 'builtin';
+    for (const k of ['mumuPath', 'mumuIndex', 'mumuRenderProfile', 'mumuMemoryGB', 'mumuCores', 'fydeosHost']) {
+      delete s.engine[k];
+    }
     // 旧版本默认无头运行：应用进程能起来但屏幕上没有窗口，等效于「打不开」。
     // 无条件迁移到带窗口模式，且不再允许通过旧配置把它关掉。
     s.engine.headless = false;

@@ -24,13 +24,16 @@ function tabletDensity() {
   }
 }
 
+/**
+ * 系统里可能存在的 adb 位置。**故意只列 Android SDK 与常见手动安装目录**：
+ * 第三方模拟器自带的 adb（MuMu / 雷电 / 蓝叠）不在这里 —— 用它们的 adb 会连带
+ * 继承别人的 server 状态（端口、授权、offline 抖动），与「独立运行」冲突。
+ * 自己那份 adb 在运行时目录里，优先级永远最高（见 engine.adbPath）。
+ */
 const COMMON_ADB_PATHS = [
   path.join(process.env.LOCALAPPDATA || '', 'Android', 'Sdk', 'platform-tools', 'adb.exe'),
-  'C:\\Android\\platform-tools\\adb.exe',
-  'C:\\adb\\adb.exe',
-  'C:\\LDPlayer\\LDPlayer9\\adb.exe',
-  'C:\\Program Files\\Netease\\MuMuPlayer-12.0\\shell\\adb.exe',
-  'C:\\Program Files\\BlueStacks_nxt\\HD-Adb.exe',
+  'C:/Android/platform-tools/adb.exe',
+  'C:/adb/adb.exe',
 ];
 
 /**

@@ -782,77 +782,35 @@ function bindAndroid() {
   $('btnAndroidApps').addEventListener('click', () => open('apps'));
 }
 
-/** 按当前底座的 id 决定哪些字段要露出来（自带 = 镜像/内存那些，第三方 = 它自己的路径） */
+/** 设置页字段同步：只剩自带运行时，所有资源项都露出来，不再按底座切换 */
 function syncBackendFields() {
-  const mode = $('setEngineMode') ? $('setEngineMode').value : 'builtin';
-  const builtin = mode === 'builtin' || mode === 'attach';
-  const show = (id, on) => { const el = $(id); if (el && el.closest('.field')) el.closest('.field').hidden = !on; };
-  show('setMumuPath', mode === 'mumu');
-  show('setFydeosHost', mode === 'fydeos');
-  show('setSystemImage', builtin);
-  show('setMemory', builtin);
-  show('setCores', builtin);
-  show('setCompat', builtin);
-  show('compatInstallField', builtin && !$('compatInstallField').hidden);
-  show('setIdle', true);
-  show('setDevice', mode === 'attach');
-  // 资源分配：自带运行时的「资源策略 / 画质 / 数据分区」只对自带底座有意义；
-  // MuMu 那套（performance_mode=custom）完全独立，混着显示只会让人改错地方。
   const perf = $('perfGroup');
-  if (perf) perf.hidden = !builtin;
-  const mumuRes = $('mumuResGroup');
-  if (mumuRes) mumuRes.hidden = mode !== 'mumu';
+  if (perf) perf.hidden = false;
   refreshResources();
 }
 
-/** 本机 / MuMu 当前资源分配说明（设置页里那几行灰字） */
+/** 本机资源上限 + 当前分配（设置页里那几行灰字） */
 async function refreshResources() {
   const bNote = $('builtinResNote');
-  const mNote = $('mumuResNote');
-  const dNote = $('mumuDataNote');
-  if (!bNote && !mNote) return;
+  if (!bNote) return;
   const gb = (mb) => (Number(mb) > 0 ? `${Math.round(Number(mb) / 1024)} GB` : '未知');
   const r = await api.resources().catch(() => null);
   if (!r || r.ok === false) {
-    const msg = (r && r.note) || '暂时读不到资源分配信息';
-    if (bNote) bNote.textContent = msg;
-    if (mNote) mNote.textContent = msg;
+    bNote.textContent = (r && (r.note || r.error)) || '暂时读不到资源分配信息';
     return;
   }
   const host = r.host || {};
   const lim = r.limits || {};
   const free = Number(r.freeMB) || Number((r.current && r.current.freeMB) || 0);
-  if (bNote && r.backend === 'builtin') {
-    bNote.textContent = `本机 ${gb(host.totalMB)} 内存 / ${host.cores} 核；`
-      + `内存最多可分 ${gb(lim.maxMB)}，核心最多 ${Math.max(1, (host.cores || 1) - 1)} 个（各留 1/4 内存与 1 核给 Windows）。`
-      + `数据分区上限 ${lim.maxGB || 0} GB${free ? `（所在磁盘剩余 ${(free / 1024).toFixed(1)} GB）` : ''}。`
-      + (r.verdict && r.verdict.note ? ` ${r.verdict.note}` : '');
-  }
-  if (mNote && r.backend === 'mumu') {
-    const cur = r.current || {};
-    const mem = cur.effectiveMemoryGB ? `${cur.effectiveMemoryGB} GB` : 'MuMu 默认';
-    const cores = cur.effectiveCores ? `${cur.effectiveCores} 核` : 'MuMu 默认';
-    mNote.textContent = `本机 ${gb(host.totalMB)} 内存 / ${host.cores} 核；内存最多可分 ${gb(lim.maxMB)}。`
-      + `MuMu 当前分配：${mem} / ${cores}。`
-      + (r.pending ? ' 新分配已保存，下次启动 MuMu 时生效。' : '')
-      + (r.verdict && r.verdict.note ? ` ${r.verdict.note}` : '');
-    if (dNote) {
-      dNote.textContent = free
-        ? `MuMu 数据盘所在分区剩余 ${(free / 1024).toFixed(1)} GB。${r.note || ''}`
-        : (r.note || '');
-    }
-  }
+  bNote.textContent = `本机 ${gb(host.totalMB)} 内存 / ${host.cores} 核；`
+    + `内存最多可分 ${gb(lim.maxMB)}，核心最多 ${Math.max(1, (host.cores || 1) - 1)} 个（各留 1/4 内存与 1 核给 Windows）。`
+    + `数据分区上限 ${lim.maxGB || 0} GB${free ? `（所在磁盘剩余 ${(free / 1024).toFixed(1)} GB）` : ''}。`
+    + (r.verdict && r.verdict.note ? ` ${r.verdict.note}` : '');
 }
 
 function fillSettings(s) {
-  $('setEngineMode').value = s.engine.mode;
-  if ($('setMumuPath')) $('setMumuPath').value = s.engine.mumuPath || '';
-  if ($('setMumuMemGB')) $('setMumuMemGB').value = String(Number(s.engine.mumuMemoryGB || 0));
-  if ($('setMumuCores')) $('setMumuCores').value = String(Number(s.engine.mumuCores || 0));
-  if ($('setFydeosHost')) $('setFydeosHost').value = s.engine.fydeosHost || '';
   syncBackendFields();
   $('setAdbPath').value = s.adbPath || '';
-  $('setDevice').value = s.device || '';
   $('setSystemImage').value = s.runtime.isoPath || '';
   $('setMemory').value = s.engine.memoryMB;
   $('setCores').value = s.engine.cores;
@@ -1091,38 +1049,7 @@ function bindSettings() {
     state.settings = await api.setSettings(patch);
   };
 
-  $('setEngineMode').addEventListener('change', async (e) => {
-    await save({ engine: { mode: e.target.value } });
-    syncBackendFields();
-    refreshStatus();
-  });
-  if ($('setMumuPath')) {
-    $('setMumuPath').addEventListener('change', (e) => save({ engine: { mumuPath: e.target.value.trim() } }));
-  }
-  // MuMu 实例的内存 / CPU：0 = 沿用 MuMu 原设置（默认，不动用户的模拟器配置）。
-  // 非 0 时下次开机会在启动前写进 MuMu 的 performance_* 配置，重启实例后生效。
-  if ($('setMumuMemGB')) {
-    $('setMumuMemGB').addEventListener('change', async (e) => {
-      await save({ engine: { mumuMemoryGB: Number(e.target.value) || 0 } });
-      await refreshResources();
-      toast({ title: 'MuMu 内存分配已保存', body: '下次启动 MuMu 时生效', type: 'ok' });
-    });
-  }
-  if ($('setMumuCores')) {
-    $('setMumuCores').addEventListener('change', async (e) => {
-      await save({ engine: { mumuCores: Number(e.target.value) || 0 } });
-      await refreshResources();
-      toast({ title: 'MuMu CPU 分配已保存', body: '下次启动 MuMu 时生效', type: 'ok' });
-    });
-  }
-  if ($('setFydeosHost')) {
-    $('setFydeosHost').addEventListener('change', (e) => save({ engine: { fydeosHost: e.target.value.trim() } }));
-  }
   $('setAdbPath').addEventListener('change', (e) => save({ adbPath: e.target.value.trim() }));
-  $('setDevice').addEventListener('change', async (e) => {
-    await save({ device: e.target.value.trim() });
-    refreshStatus();
-  });
   $('setSystemImage').addEventListener('change', (e) => save({ runtime: { isoPath: e.target.value.trim() } }));
   // 内存 / 核心：填了具体值就关掉「自动」，填 0 又回到自动。
   // 旧代码只写 memoryMB，而 overridesFromSettings 只在 autoMemory=false 时才认它，
@@ -1668,20 +1595,6 @@ function bindSettings() {
       window.open(`file:///${String(dir).replace(/\\/g, '/')}`);
     });
   }
-
-  $('btnProbe').addEventListener('click', async () => {
-    const el = $('probeResult');
-    el.textContent = '探测中…';
-    const found = await api.runtimeProbe();
-    if (!found.length) {
-      el.textContent = '未发现已运行的运行时';
-      return;
-    }
-    el.textContent = `发现：${found.map((f) => f.name).join('、')}`;
-    await api.setSettings({ device: found[0].serial });
-    $('setDevice').value = found[0].serial;
-    refreshStatus();
-  });
 
   $('btnRuntimeStart').addEventListener('click', async () => {
     const el = $('probeResult');

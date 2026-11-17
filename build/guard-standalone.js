@@ -5,16 +5,15 @@
  * 为什么需要一道构建期检查：
  *   ApkStart 的安装包（NSIS / 便携版 / MSIX）必须开箱即用 —— 自带 emulator +
  *   platform-tools + 系统镜像，装完就能跑，不要求用户先装 MuMu / 雷电 / 蓝叠。
- *   MuMu 只是「你机器上本来就有，那可以复用」的可选后端，绝不能变成依赖。
+ *   0.5.6 起更进一步：**代码里根本没有第三方底座**，安装的不是「自带运行时 + 可选复用」，
+ *   而是「只有自带运行时」。所以这里除了拦二进制，也拦第三方底座的适配器源码
+ *   （backends/mumu.js / backends/fydeos.js / mumu-compat.js）—— 一旦有人把它们加回来，
+ *   构建直接失败，避免「代码里又留了一条能接管别人模拟器的路」。
  *
- *   但这条约束很容易被悄悄破坏：比如某次把 MuMu 目录当运行时拷进了 build/runtime，
+ *   这条约束很容易被悄悄破坏：比如某次把 MuMu 目录当运行时拷进了 build/runtime，
  *   或者在本地把模拟器目录塞进 resources 再打包。那时候应用在开发机上照样能跑，
  *   用户装完却是「要另外装个模拟器」——问题只在别人电脑上暴露。
  *   所以在打包前扫一遍文件名，命中就直接让构建失败。
- *
- * 允许包含的只有我们自己的东西：源码里的 `backends/mumu.js` 是**适配器**（几十 KB 的 JS），
- * 它只负责发现并驱动用户已装的 MuMu，本身不带任何 MuMu 二进制。本守卫只扫运行时目录，
- * 不会误伤源码。
  */
 
 const fs = require('fs');
@@ -72,6 +71,47 @@ function findBundled(dir, { limit = 20 } = {}) {
 }
 
 /**
+ * 第三方底座的适配器源码（打包产物里出现就说明把「可复用别人模拟器」的能力带回来了）。
+ * 这些是 .js，不在 BINARY_EXT 里，所以单独判。
+ */
+const BANNED_SOURCE = [
+  { re: /^mumu\.js$/i, what: 'MuMu 底座适配器' },
+  { re: /^fydeos\.js$/i, what: 'FydeOS 底座适配器' },
+  { re: /^mumu-compat\.js$/i, what: 'MuMu 兼容策略' },
+  { re: /^frame\.js$/i, what: 'MuMu 帧体检' },
+];
+
+/**
+ * 找打包产物里的第三方底座源码。
+ * 只认「backends/xxx.js」或直接位于 src/core 下的那几个文件名，避免误伤别的 frame.js。
+ * @param {string} dir
+ * @returns {Array<{path: string, name: string, vendor: string}>}
+ */
+function findForbiddenSource(dir) {
+  const hits = [];
+  const walk = (d) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(d, { withFileTypes: true });
+    } catch (_) {
+      return;
+    }
+    const dirName = path.basename(d);
+    for (const e of entries) {
+      if (e.isDirectory()) { walk(path.join(d, e.name)); continue; }
+      const hit = BANNED_SOURCE.find((b) => b.re.test(e.name));
+      if (!hit) continue;
+      // 只认这几个明确的落点：backends/ 下的 mumu|fydeos、core/ 下的 mumu-compat / frame。
+      // 别处同名文件（比如渲染层的 frame.js）不拦，避免误伤。
+      const suspicious = dirName === 'backends' || (dirName === 'core' && !/^builtin\.js$/i.test(e.name));
+      if (suspicious) hits.push({ path: path.join(d, e.name), name: e.name, vendor: hit.what });
+    }
+  };
+  walk(dir);
+  return hits;
+}
+
+/**
  * 断言目录里没有第三方模拟器。
  * @param {string} dir
  * @param {object} [opts] { label, exit } label 用于提示；exit=false 只返回结果不杀进程
@@ -79,18 +119,18 @@ function findBundled(dir, { limit = 20 } = {}) {
  */
 function assertStandalone(dir, { label = '打包产物', exit = true } = {}) {
   if (!dir || !fs.existsSync(dir)) return { ok: true, skipped: true, hits: [] };
-  const hits = findBundled(dir);
+  const hits = findBundled(dir).concat(findForbiddenSource(dir));
   if (!hits.length) return { ok: true, hits: [] };
 
   const vendors = [...new Set(hits.map((h) => h.vendor))].join(' / ');
   console.error(`\n[守卫] ${label} 里混进了第三方模拟器（${vendors}）：`);
   for (const h of hits) console.error(`  - ${h.path}`);
   console.error('');
-  console.error('ApkStart 的安装包必须自带运行时、独立运行，不能依赖也别捆绑别的模拟器。');
-  console.error('MuMu 只是可选的「复用本机已装模拟器」后端，适配器源码在 src/core/backends/mumu.js，');
-  console.error('打包时只需要源码，不需要它的任何二进制。请把上面这些路径从打包目录里删掉后重试。\n');
+  console.error('ApkStart 的安装包必须自带运行时、独立运行：不能依赖、不能捆绑别的模拟器，');
+  console.error('也不允许把「接管别人模拟器」的适配器源码带回来。');
+  console.error('请把上面这些路径从打包目录里删掉后重试。\n');
   if (exit) process.exit(4);
   return { ok: false, hits };
 }
 
-module.exports = { BANNED, findBundled, assertStandalone };
+module.exports = { BANNED, BANNED_SOURCE, findBundled, findForbiddenSource, assertStandalone };

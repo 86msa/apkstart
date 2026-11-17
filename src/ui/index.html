@@ -343,44 +343,6 @@
         </div>
       </div>
 
-      <div class="group" id="mumuResGroup" hidden>
-        <div class="group-title">MuMu 实例资源分配</div>
-        <div class="field two">
-          <div>
-            <label>内存（GB）</label>
-            <select id="setMumuMemGB">
-              <option value="0">沿用 MuMu 原设置</option>
-              <option value="2">2 GB</option>
-              <option value="4">4 GB</option>
-              <option value="6">6 GB</option>
-              <option value="8">8 GB</option>
-              <option value="12">12 GB</option>
-              <option value="16">16 GB</option>
-              <option value="24">24 GB</option>
-              <option value="32">32 GB</option>
-            </select>
-          </div>
-          <div>
-            <label>CPU 核心</label>
-            <select id="setMumuCores">
-              <option value="0">沿用 MuMu 原设置</option>
-              <option value="2">2 核</option>
-              <option value="4">4 核</option>
-              <option value="6">6 核</option>
-              <option value="8">8 核</option>
-              <option value="12">12 核</option>
-              <option value="16">16 核</option>
-            </select>
-          </div>
-        </div>
-        <div class="field">
-          <span class="sub" id="mumuResNote">正在读取 MuMu 当前分配…</span>
-        </div>
-        <div class="field">
-          <span class="sub" id="mumuDataNote">正在读取 MuMu 数据盘余量…</span>
-        </div>
-      </div>
-
       <div class="group" id="perfGroup">
         <div class="group-title">性能与资源占用</div>
         <div class="field">
@@ -554,29 +516,13 @@
       <div class="group">
         <div class="group-title">运行时</div>
         <div class="field">
-          <label>引擎模式</label>
-          <select id="setEngineMode">
-            <option value="builtin">自带运行时（推荐，QEMU + Android-x86，无第三方依赖）</option>
-            <option value="mumu">MuMu 模拟器 12（复用本机已装的网易模拟器）</option>
-            <option value="fydeos">FydeOS 安卓子系统（FydeOS 装在本机，或跑在 VMware / VirtualBox 里）</option>
-            <option value="attach">连接已有运行时（高级：复用 WSA / 其他模拟器的 adb 端口）</option>
-          </select>
-          <span class="sub">「自带运行时」会自己下载安卓镜像；选第三方模拟器时不下载任何东西，
-            直接驱动你电脑上已经装好的那台，装的应用和它自己的应用共用一套环境。
-            FydeOS 底座驱动 FydeOS 自带的安卓环境（需要先在它的安卓设置里打开「ADB 调试」）；
-            FydeOS 跑在虚拟机里时，要在下面填那台虚拟机的地址。它不嵌窗口，画面由 FydeOS 自己显示。</span>
-        </div>
-        <div class="field" id="fydeosHostField" hidden>
-          <label>FydeOS 安卓子系统地址</label>
-          <input id="setFydeosHost" type="text" placeholder="127.0.0.1:5555，或虚拟机的局域网 IP:5555" />
-          <span class="sub">FydeOS 跑在 VMware / VirtualBox 里时必填。最省事的配法：给虚拟机做端口转发
-            （宿主 5555 → guest 5555），然后填 <b>127.0.0.1:5555</b>。
-            直接装在本机的 FydeOS 可以留空（自动探测 arc:5555 等）。</span>
-        </div>
-        <div class="field" id="mumuPathField" hidden>
-          <label>MuMu 安装目录（留空自动查找）</label>
-          <input id="setMumuPath" type="text" placeholder="例如 D:\MuMu Player 12" />
-          <span class="sub">默认会按注册表和常见路径自动找 MuMuManager.exe；装在非常规盘符时在这里指定。</span>
+          <label>运行时</label>
+          <div class="row">
+            <input id="setEngineLabel" type="text" readonly value="ApkStart 自带运行时（QEMU + Android 14，独立运行）" />
+          </div>
+          <span class="sub">ApkStart 只跑自己的运行时：adb / emulator / 系统镜像都由它自己下载和管理，
+            不探测、不接管、不依赖你电脑上装的任何模拟器（MuMu / 雷电 / 蓝叠 / WSA 都不会被使用）。
+            这样换机器、别人装没装模拟器、模拟器怎么升级，都不影响这里。</span>
         </div>
         <div class="field">
           <label>adb 路径</label>
@@ -584,10 +530,7 @@
         </div>
         <div class="field">
           <label>设备地址</label>
-          <div class="row">
-            <input id="setDevice" type="text" placeholder="127.0.0.1:58526" />
-            <button class="btn ghost sm" id="btnProbe">探测</button>
-          </div>
+          <span class="sub" id="deviceAddrNote">由 ApkStart 自己分配（emulator-5554，端口冲突时自动顺延），无需填写。</span>
         </div>
         <div class="field">
           <label>系统镜像（ISO）</label>

@@ -1,4 +1,4 @@
-# Microsoft Store 提交材料（ApkStart 0.5.5）
+# Microsoft Store 提交材料（ApkStart 0.5.6）
 
 > 这份文件是给 Partner Center 表单直接复制用的。包体、图标、清单由脚本产出，
 > 只有「注册账号 → 预留名称 → 上传 → 送审」必须在网页上人工完成。
@@ -12,7 +12,7 @@
 | Product name | `ApkStart` |
 | Category | Developer tools → Utilities & tools（备选：Productivity） |
 | Price | Free |
-| Package | `dist/store/ApkStart_0.5.5.0_x64.msix`（x64，约 850 MB） |
+| Package | `dist/store/ApkStart_0.5.6.0_x64.msix`（x64，约 850 MB） |
 | 支持语言 | 简体中文 / English (United States) |
 | 官网 | https://github.com/RoutineMiku/apkstart |
 | 支持邮箱 | <!-- 填你的邮箱 --> |
@@ -22,7 +22,12 @@
 
 **中文**
 ```
-0.5.5：
+0.5.6：
+· 运行时只保留 ApkStart 自带的一套：不再探测、接管或依赖电脑上安装的任何模拟器（MuMu、雷电、蓝叠、WSA 都不再使用）。
+· 设置里移除了「引擎模式」和第三方模拟器相关选项，不会再因为导入旧配置而切到别人的模拟器。
+· 内存、CPU 核心数与数据分区仍可自行分配，上限按你的电脑配置计算。
+
+0.5.5（已包含）：
 · 修复部分电脑上应用画面全黑的问题：自动识别显卡能力并切换渲染档位，画面异常时自动重启重试。
 · 支持安装 50GB 级的大型安卓游戏：安装前按实际需求检查磁盘空间，不再装到一半才失败。
 · 内存、CPU 核心数与数据分区大小现在可以自己分配，上限跟着你的电脑配置走。
@@ -56,7 +61,12 @@
 
 **English**
 ```
-0.5.5:
+0.5.6:
+· Only ApkStart's own runtime remains: emulators installed on the PC (MuMu, LDPlayer, BlueStacks, WSA) are no longer detected, taken over, or relied on.
+· The engine selector and all third-party emulator options were removed from Settings, so an imported old config can no longer switch to someone else's emulator.
+· Memory, CPU cores and the /data partition are still user-allocatable, with limits derived from your PC.
+
+0.5.5 (included):
 · Fixed black app screens on some PCs: graphics capability is detected and the render path is switched automatically, with a retry when the picture is blank.
 · Supports installing large Android games in the 50 GB range: disk space is checked up front instead of failing halfway through.
 · Memory, CPU cores and the /data partition size can now be allocated by the user, with limits derived from your PC.
@@ -293,7 +303,7 @@ Notes:
    ```powershell
    node build/msix.js --identity "<Identity/Name>" --publisher "<Identity/Publisher>"
    ```
-4. **Packages** → 上传 `dist/store/ApkStart_0.5.5.0_x64.msix`，等待校验通过。
+4. **Packages** → 上传 `dist/store/ApkStart_0.5.6.0_x64.msix`，等待校验通过。
 5. **Store listing** → 填第 2–5 节的内容、上传截图、选分类。
 6. **Pricing and availability** → Free，市场选中国 + 全球。
 7. **Submission options** → 粘贴第 6 节的 certification notes。

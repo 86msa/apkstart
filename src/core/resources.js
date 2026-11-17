@@ -2,12 +2,9 @@
 /**
  * 资源分配（内存 / CPU / 存储）的纯逻辑。
  *
- * 为什么要单独一层：同一个「给安卓分多少内存」在两个底座里的落点完全不同——
- *   - 自带运行时：写进 qemu 命令行（-memory / -cores），改完下次开机生效；
- *   - MuMu：写 MuMu 自己的 performance_mode=custom + performance_cpu.custom /
- *     performance_mem.custom，同样要重启实例才生效。
- * 但「用户能填多大」「填过头会发生什么」这套判断是共用的，所以抽到这里，
- * 不依赖 electron，CI 里可以直接 require 做单测。
+ * 为什么要单独一层：「给安卓分多少内存」最终要落进 qemu 命令行（-memory / -cores），
+ * 改完下次开机生效；但「用户能填多大」「填过头会发生什么」这套判断是纯函数，
+ * 抽出来不依赖 electron，CI 里可以直接 require 做单测。
  *
  * 三条硬约束（都是实测踩出来的）：
  *   1. 内存不能把宿主吃满：Windows + 前台程序至少要留 25%，否则整机开始换页，
@@ -184,37 +181,21 @@ function storageVerdict(freeMB, packageBytes) {
 }
 
 /**
- * 把「内存 GB + 核心数」翻译成 MuMuManager 的 setting 键值对。
- * 只给了其中一项时，另一项保持 MuMu 里的原值（仍然切到 custom 模式）。
- * @returns {Array<{key:string, value:string}>}
+ * 磁盘空间是否够装这个包（50GB 级游戏最常见的失败点）。
+ * 和 storageVerdict 的区别：这个只看「够不够」，文案是给安装前拦下来用的。
+ * @returns {{ ok:boolean, unknown?:boolean, freeMB:number, requiredMB:number, message:string }}
  */
-function mumuResourcePairs(memoryGB, cores) {
-  const mem = Number(memoryGB) || 0;
-  const cpu = toInt(cores);
-  if (mem <= 0 && cpu <= 0) return [];
-  const pairs = [{ key: 'performance_mode', value: 'custom' }];
-  if (cpu > 0) pairs.push({ key: 'performance_cpu.custom', value: String(Math.min(16, Math.max(1, cpu))) });
-  if (mem > 0) {
-    // MuMu 这份配置里内存是 GB 浮点数（原值形如 5.000000），保留同样精度避免被它自己判成非法
-    const gb = Math.min(64, Math.max(0.5, Math.round(mem * 2) / 2));
-    pairs.push({ key: 'performance_mem.custom', value: gb.toFixed(6) });
-  }
-  return pairs;
-}
-
-/**
- * 把 MuMu 的 --all 结果翻译成「当前分配」。
- * @returns {{ mode:string, memoryGB:number, cores:number, customMemoryGB:number, customCores:number }}
- */
-function parseMumuResources(all) {
-  const s = all && typeof all === 'object' ? all : {};
-  const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+function diskVerdict(freeMB, requiredMB) {
+  const free = Math.max(0, toInt(freeMB));
+  const need = Math.max(0, toInt(requiredMB));
+  if (!free) return { ok: true, unknown: true, freeMB: 0, requiredMB: need, message: '' };
+  if (free >= need) return { ok: true, freeMB: free, requiredMB: need, message: '' };
   return {
-    mode: String(s.performance_mode || ''),
-    memoryGB: num(s.vm_mem),
-    cores: num(s.vm_cpu),
-    customMemoryGB: num(s['performance_mem.custom']),
-    customCores: num(s['performance_cpu.custom']),
+    ok: false,
+    freeMB: free,
+    requiredMB: need,
+    message: `磁盘空间不足：还要约 ${Math.ceil(need / 1024)} GB，但 ApkStart 运行时所在磁盘只剩 ${(free / 1024).toFixed(1)} GB。`
+      + '请在设置里把运行时目录挪到空间更大的分区，或清理后重试。',
   };
 }
 
@@ -228,9 +209,8 @@ module.exports = {
   clampCores,
   memVerdict,
   diskRequiredMB,
+  diskVerdict,
   diskLimits,
   clampDataGB,
   storageVerdict,
-  mumuResourcePairs,
-  parseMumuResources,
 };

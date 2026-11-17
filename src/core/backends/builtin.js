@@ -16,8 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const { Backend, CAPS } = require('./base');
 const { freeDiskMB } = require('../doctor');
-const { diskRequiredMB, diskVerdict } = require('../mumu-compat');
-const { hostProfile, memoryLimits, memVerdict, diskLimits } = require('../resources');
+const { diskRequiredMB, diskVerdict, hostProfile, memoryLimits, memVerdict, diskLimits } = require('../resources');
 
 class BuiltinBackend extends Backend {
   static get id() { return 'builtin'; }

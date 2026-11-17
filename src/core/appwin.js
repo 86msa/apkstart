@@ -31,8 +31,8 @@ class AppWindow {
   constructor({ agent, setOrientation, mouseHook = false, pointerConfig = null, windowTargets = null }) {
     this.agent = agent;
     this.setOrientation = setOrientation || null;
-    // 画面窗口的候选句柄来源：自带底座为 null（由窗口代理自己找），
-    // 第三方底座（MuMu 等）传入一个返回 ["0x…"] 的函数，每次 embed 现取。
+    // 画面窗口的候选句柄来源：现在只有一个底座，恒为 null，
+    // 由窗口代理按进程作用域自己找（这些窗口都是我们拉起的 emulator 创建的）。
     this.windowTargets = typeof windowTargets === 'function' ? windowTargets : null;
     // 全局鼠标钩子只在「应用窗口前台 + 至少一项映射开启」时安装。
     // pointerConfig 传函数：设置页改了开关，下一次 focus 就生效，不用重启。
@@ -390,7 +390,7 @@ class AppWindow {
       if (!this.isOpen) return false;
       const hwnd = this._hwnd();
       if (!hwnd) return false;
-      // 第三方底座（MuMu 等）由外部提供候选句柄；拿不到就等一下再试
+      // 外部若提供了候选句柄（历史接口，当前恒为 null）；拿不到就等一下再试
       // —— 句柄是每次开机重新分配的，缓存一份旧的会把窗口嵌错地方。
       let targets = null;
       if (typeof this.windowTargets === 'function') {
