@@ -94,6 +94,36 @@ function friendlyLaunchError(raw, pkg) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * 解析 `adb devices` 里某个 serial 的 state 列。
+ * 关键：unauthorized 的设备在 `get-state` 里也会回报 'device'，只有 devices 列表的
+ * state 列能区分 authorized / unauthorized / offline —— 开机探测据此快速自愈。
+ */
+function parseDeviceState(text, serial) {
+  const lines = String(text || '').split(/\r?\n/).slice(1);
+  for (const line of lines) {
+    const m = /^(\S+)\s+(unauthorized|offline|recovery|sideload|no\s+permissions|device)\b/i.exec(line.trim());
+    if (!m) continue;
+    if (serial && m[1] !== serial) continue;
+    const st = m[2].toLowerCase().replace(/\s+/g, '');
+    if (st === 'device') return 'device';
+    if (st === 'unauthorized' || st === 'nopermissions') return 'unauthorized';
+    return st; // offline / recovery / sideload
+  }
+  return 'no-device';
+}
+
+/** 从「允许 USB 调试」对话框未确认导致的 shell 报错里识别出 unauthorized */
+function isUnauthorizedError(raw) {
+  return /\bunauthorized\b|no permissions|confirm.*(allow|debug)/i.test(String(raw || ''));
+}
+
+/** 从 `pm path <pkg>` 的输出里取出每个 APK 的真实路径 */
+function parsePmPaths(text) {
+  return String(text || '').split(/\r?\n/).map((l) => l.trim())
+    .filter((l) => /^package:/.test(l)).map((l) => l.slice(8).trim()).filter(Boolean);
+}
+
 /** 已解析过的启动入口（adbPath|pkg → activity），10 分钟有效 */
 const LAUNCHER_CACHE = new Map();
 
@@ -208,7 +238,18 @@ class AdbClient {
   }
 
   _adbEnv() {
-    return { ...process.env, ANDROID_ADB_SERVER_PORT: process.env.ANDROID_ADB_SERVER_PORT || '5044' };
+    const env = { ...process.env, ANDROID_ADB_SERVER_PORT: process.env.ANDROID_ADB_SERVER_PORT || '5044' };
+    // Play 商店镜像会强制 ADB 授权：host 的 adb server 与 guest 的 adbd 必须用同一把
+    // adbkey。官方做法是 adb/emulator 共用 %USERPROFILE%\.android\adbkey{,.pub}，
+    // emulator 启动时把 adbkey.pub 烤进 guest 的 /data/misc/adb/adb_keys。
+    // 显式告诉 adb server 去哪里找公钥：某些环境 ANDROID_SDK_HOME / 绿色版运行时
+    // 会让 adb 在别处找 key，于是每次冷启动都弹「允许 USB 调试」→ device unauthorized。
+    if (!env.ADB_VENDOR_KEYS) {
+      const home = process.env.USERPROFILE || process.env.HOME || '';
+      const keyDir = path.join(home, '.android');
+      try { if (home && fs.existsSync(keyDir)) env.ADB_VENDOR_KEYS = keyDir; } catch (_) { /* ignore */ }
+    }
+    return env;
   }
 
   exec(args, { timeout = 30000, withSerial = true, binary = false } = {}) {
@@ -363,6 +404,20 @@ class AdbClient {
     }
   }
 
+  /**
+   * 读取本 serial 在 `adb devices` 里的真实状态：device / unauthorized / offline / no-device。
+   * isOnline() 用的 get-state 无法区分 authorized 与 unauthorized（两者都是 'device'），
+   * 开机探测靠这个方法来识别「授权对话框卡住」并快速自愈。
+   */
+  async deviceState() {
+    try {
+      const { stdout } = await this.exec(['devices'], { withSerial: false, timeout: 8000 });
+      return parseDeviceState(stdout, this.serial);
+    } catch (_) {
+      return 'no-device';
+    }
+  }
+
   async devices() {
     const { stdout } = await this.exec(['devices', '-l'], { withSerial: false });
     return stdout.split('\n').slice(1)
@@ -483,9 +538,24 @@ class AdbClient {
     }
   }
 
+  /**
+   * 是否真的装好了 —— 不轻信 PackageManager 的一句话。
+   *
+   * 快照与数据分区不一致时，`pm path` 会因 packages.xml 里还留着记录而返回
+   * `package:/data/app/.../base.apk`（installed=true），但那个 APK 文件其实已经被
+   * 回滚掉了。继续 `am start` 只会失败。所以用 `test -f/-s` 逐个核对 pm 报出来的
+   * 路径，文件不在（或空文件）就判定为「未真正安装」，交给上层自动重装。
+   *
+   * @returns {Promise<boolean>}
+   */
   async isInstalled(pkg) {
     const out = await this.shell(`pm path ${pkg}`);
-    return /package:/.test(out);
+    const paths = parsePmPaths(out);
+    if (!paths.length) return false;
+    // 分片 APK 全部要在；任一片丢了都启动不了。合并成一条 shell，省一次 adb 往返。
+    const checks = paths.map((p) => `[ -s "${p}" ]`).join(' && ');
+    const probe = await this.shell(`${checks} && echo __APKSTART_PRESENT__`, { timeout: 10000 }).catch(() => '');
+    return /__APKSTART_PRESENT__/.test(String(probe));
   }
 
   async listPackages() {
@@ -1011,5 +1081,5 @@ class AdbClient {
 
 module.exports = {
   AdbClient, AdbError, parseStatList, friendlyInstallError, friendlyLaunchError,
-  componentArg, parseResolvedActivity,
+  componentArg, parseResolvedActivity, parseDeviceState, isUnauthorizedError, parsePmPaths,
 };

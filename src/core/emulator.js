@@ -1260,7 +1260,9 @@ class EmulatorEngine {
       this.lastDiagnosis = d;
       lastError = fatal ? `${d.title}：${d.hint}` : '开机超时（可能是首次引导较慢或硬件加速未生效）';
       onLog(`${lastError}，自动换一组参数重试…`);
-      this._noteGpuFailure(plan);
+      // 授权对话框卡住不是渲染后端的问题，别把当前 GPU 记进「启动即崩」黑名单，
+      // 否则下次启动会无缘无故跳过用户机器本来能用的后端。
+      if (d.code !== 'ADB_UNAUTHORIZED') this._noteGpuFailure(plan);
       // eslint-disable-next-line no-await-in-loop
       await this.killAttempt();
     }
@@ -1347,11 +1349,18 @@ class EmulatorEngine {
     }
     this.cancelSnapshotSave();
     const serial = this.serial;
-    if (adbPath && this.snapshotWorthSaving !== false) {
-      // 关机前补存一次：空闲路径没来得及存（比如用户装完应用马上退出）时，
-      // 下一次开机仍然能走快照恢复，而不是重新冷启动。
+    // 关机前先判断 guest 是否健康，只在这一次判断里问一遍 adb：
+    //  - 健康 → 补存一次快照（空闲路径没来得及存时，下次仍能秒进）；
+    //  - 不健康（adb 卡在 unauthorized / 没开机完成）→ 不存，并且**在退出后作废快照**：
+    //    `adb emu kill` 会让 emulator 自己按 quickboot 存一份内存状态，那份同样会
+    //    冻结未授权状态。不在这里清掉，下次恢复又是一份「开机必超时」的毒快照。
+    const healthy = adbPath ? await this._adbGuestHealthy(adbPath) : false;
+    if (adbPath && this.snapshotWorthSaving !== false && healthy) {
       // 3GB 内存写盘要几秒到二十几秒，超时给足，别让快照写一半就被 kill 掉。
       await this._saveViaAdb(adbPath, { timeout: 60000 });
+    }
+    if (!healthy && this.snapshotWorthSaving !== false) {
+      this.log('关机时 guest 未授权/未就绪：将作废快照，下次冷启动重新注入调试授权');
     }
     if (adbPath) {
       await new Promise((resolve) => {
@@ -1372,6 +1381,11 @@ class EmulatorEngine {
     // 关干净了就把启动器句柄丢掉。留着它会让 running() 永远返回 true、
     // start() 以为还能复用（见 start() 里的注释）。
     this.proc = null;
+    // 进程已退出，这时再作废它可能在退出时自动存的毒快照。顺序很重要：必须放在
+    // emu kill + 端口关闭之后，否则它会把刚删的快照又写回来。
+    if (!healthy && this.snapshotWorthSaving !== false) {
+      try { this.invalidateSnapshot(); } catch (_) { /* ignore */ }
+    }
     return true;
   }
 
@@ -1404,8 +1418,35 @@ class EmulatorEngine {
     });
   }
 
-  /** 用 adb 触发一次快照保存（失败返回 false，调用方决定要不要再试） */
-  _saveViaAdb(adbPath, { timeout = 45000 } = {}) {
+  /**
+   * guest 是否处于「可以安全存快照」的健康状态：adb authorized + boot 完成。
+   * 冷启动时若「允许 USB 调试吗？」对话框还挂着，state 是 unauthorized —— 这时存下
+   * 内存 + 磁盘，guest 里就没有 host 的 adbkey.pub，下次恢复还是 unauthorized，
+   * 每轮探测的 shell 都抛异常，干等 240s 还被误诊成显卡/虚拟化问题。
+   */
+  async _adbGuestHealthy(adbPath) {
+    if (!adbPath) return false;
+    try {
+      const { AdbClient } = require('./adb');
+      const probe = new AdbClient({ adbPath, serial: this.serial });
+      const state = await probe.deviceState();
+      const out = await probe.shell('getprop sys.boot_completed', { timeout: 6000 }).catch(() => '');
+      return state === 'device' && String(out).trim() === '1';
+    } catch (_) {
+      return false; // 读不到就按不健康处理
+    }
+  }
+
+  /**
+   * 用 adb 触发一次快照保存（失败返回 false，调用方决定要不要再试）。
+   * 只有 guest 健康时才存，宁可下次冷启动 20 多秒，也不能存一份「开机必失败」的毒快照。
+   */
+  async _saveViaAdb(adbPath, { timeout = 45000 } = {}) {
+    if (!adbPath) return false;
+    if (!(await this._adbGuestHealthy(adbPath))) {
+      this.log('跳过快照保存：guest 未授权或未开机完成（避免存入未授权的毒快照）');
+      return false;
+    }
     return new Promise((resolve) => {
       execFile(adbPath, ['-s', this.serial, 'emu', 'avd', 'snapshot', 'save', SNAPSHOT_NAME],
         { timeout, windowsHide: true }, (err) => resolve(!err));

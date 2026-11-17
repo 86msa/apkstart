@@ -489,10 +489,16 @@ class Installer {
     // 应用可能还没装进当前运行时（镜像重建 / 清过数据 / 首次），直接拉起会报
     // "Invalid packageName"。先在本地缓存里把它装上再启动，这样「点开应用」永远能进，
     // 不用先手动装一遍——这正是「点击已安装应用直接进入系统」想要的体验。
+    // 关键：用 isInstalled()（pm path + 逐个核对 APK 文件真实存在）而不是
+    // `pm list packages`。快照与数据分区不一致时 PackageManager 仍报 installed=true，
+    // 但 /data/app 下文件已被回滚掉 —— 这时 am start 必然失败。文件校验不通过就重装。
     if (app && app.apkPath && fs.existsSync(app.apkPath)) {
-      const pkgs = await rt.client.shell(`pm list packages ${pkg}`, { timeout: 8000 }).catch(() => '');
-      if (!new RegExp(`package:${pkg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(pkgs)) {
-        onLog('应用尚未安装，正在自动安装…');
+      let installed = false;
+      try { installed = await rt.client.isInstalled(pkg); } catch (_) { /* 当作未安装，走重装 */ }
+      if (!installed) {
+        onLog('应用文件缺失（快照与数据不一致），正在用本地备份自动重装…');
+        // 重装前作废快照：否则旧快照的 packages.xml 仍说「已装」，下次又不对
+        try { this.runtime.emulator?.invalidateSnapshot(); } catch (_) { /* ignore */ }
         await rt.client.install(app.apkPath).catch((e) => onLog(`自动安装失败：${e.message}`));
       }
     }

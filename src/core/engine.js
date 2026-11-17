@@ -11,7 +11,7 @@ const { spawn, execFile } = require('child_process');
 const net = require('net');
 const fs = require('fs');
 const path = require('path');
-const { AdbClient } = require('./adb');
+const { AdbClient, isUnauthorizedError } = require('./adb');
 const store = require('./store');
 const { Provisioner } = require('./provision');
 const { EmulatorEngine } = require('./emulator');
@@ -433,6 +433,13 @@ class Runtime {
       let probeStart = Date.now();
       let errStreak = 0;
       let lastHeal = 0;
+      let authHealed = false;  // 本次 start() 是否已因「未授权」作废旧快照冷启动过
+      const diagUnauthorized = () => ({
+        code: 'ADB_UNAUTHORIZED',
+        title: '安卓调试授权未完成（授权对话框）',
+        hint: '系统卡在「允许 USB 调试？」对话框，已自动作废旧快照并冷启动一次让运行时'
+          + '重新注入 adb 公钥。若反复出现，请删除 %USERPROFILE%\\.android\\adbkey* 后重试。',
+      });
       const probe = async ({ serial }) => {
         if (!this.emulator.running()) return 'fatal';
         if (!this._probeClient || this._probeClient.serial !== serial) {
@@ -447,11 +454,33 @@ class Runtime {
           errStreak = 0;
           if (booted && pmReady) return 'ok';
           return booted ? 'pending' : 'booting';
-        } catch (_) {
+        } catch (e) {
           errStreak += 1;
-          // adb 传输会偶发地卡在 offline / unauthorized（另一个 adb server 抢了端口、
-          // 或者握手被打断），这时每一轮 shell 都报错，probe 永远 pending ——
-          // 上层只会看到「开机超时」，白白等到 240 秒。连错 6 轮就重启一次 server 自愈。
+          // 关键分支：adb shell 报错可能是「还没开机」也可能是「授权对话框卡住」。
+          // 后者每轮 shell 都抛异常，旧实现只当普通 offline：重启 server 后继续按
+          // 240s×4 组参数干等，最后报「运行时未能完成开机」，让用户以为是显卡/虚拟化。
+          // 这里先按报错文本、再按 devices 的 state 列（get-state 分不清 authorized）
+          // 双重确认 unauthorized，命中就作废旧快照冷启动 + 给出准确诊断，不再空等。
+          const raw = String((e && (e.raw || e.stdout || e.message)) || '');
+          let unauthorized = isUnauthorizedError(raw);
+          if (!unauthorized) {
+            const st = await c.deviceState().catch(() => '');
+            unauthorized = st === 'unauthorized';
+          }
+          if (unauthorized) {
+            this.emulator.lastDiagnosis = diagUnauthorized();
+            if (!authHealed) {
+              authHealed = true;
+              onLog('adb 卡在「允许 USB 调试」授权对话框，正在作废旧快照并冷启动以重新注入公钥…');
+              try { this.emulator.invalidateSnapshot(); } catch (_) { /* ignore */ }
+              this.emulator._coldBoot = true; // 下一轮强制冷启动，让 emulator 重新注入 adb 公钥
+              await this.emulator.resetAdbServer().catch(() => {});
+              this._probeClient = null;
+            }
+            // 交给 start() 立刻换一组参数重试；冷启动后 dialog 问题会消失
+            return 'fatal';
+          }
+          // 其它 adb 传输异常：沿用原来的重启 server 自愈
           const now = Date.now();
           if (errStreak >= 6 && now - probeStart > 25000 && now - lastHeal > 30000) {
             lastHeal = now;
