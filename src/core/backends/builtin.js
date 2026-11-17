@@ -17,6 +17,7 @@ const path = require('path');
 const { Backend, CAPS } = require('./base');
 const { freeDiskMB } = require('../doctor');
 const { diskRequiredMB, diskVerdict } = require('../mumu-compat');
+const { hostProfile, memoryLimits, memVerdict, diskLimits } = require('../resources');
 
 class BuiltinBackend extends Backend {
   static get id() { return 'builtin'; }
@@ -123,6 +124,35 @@ class BuiltinBackend extends Backend {
   usage() { return this.rt ? this.rt.usage() : { total: 0, items: [] }; }
 
   dataInfo() { return this.rt ? this.rt.emulator.dataInfo() : { ok: false }; }
+
+  /**
+   * 设置页展示用：宿主上限 + 当前分配。
+   * 自带运行时的内存/CPU 是写进 qemu 命令行的，改完下次开安卓生效；
+   * 数据分区可以就地扩容（resizeData），不丢已装应用。
+   */
+  resources() {
+    const info = this.dataInfo() || {};
+    const host = hostProfile();
+    const eng = (this.rt && this.rt.settings && this.rt.settings.engine) || {};
+    const freeMB = info.avdDir ? freeDiskMB(info.avdDir) : 0;
+    const memMB = Number(eng.memoryMB) || 0;
+    return {
+      backend: 'builtin',
+      host,
+      limits: { ...memoryLimits(host.totalMB), ...diskLimits(freeMB) },
+      wanted: { memoryGB: memMB ? Math.round((memMB / 1024) * 2) / 2 : 0, cores: Number(eng.cores) || 0 },
+      current: {
+        memoryGB: memMB ? Math.round((memMB / 1024) * 2) / 2 : 0,
+        cores: Number(eng.cores) || 0,
+        dataGB: Number(info.configuredGB) || 0,
+        imageGB: Number(info.imageGB) || 0,
+      },
+      freeMB,
+      pending: false,
+      verdict: memVerdict(memMB, host.totalMB),
+      note: '自带运行时的内存/CPU 下次启动安卓生效；数据分区改大后点「立即扩容」就地生效，已装应用与存档都保留。',
+    };
+  }
 
   /**
    * 大包预检：除了物理磁盘，还要看 /data 分区本身够不够。

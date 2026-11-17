@@ -1387,8 +1387,36 @@ function registerIpc() {
     shell.openPath(store.APK_DIR);
   });
 
+  /**
+   * 内存 / CPU / 数据分区这几项会直接决定虚拟机怎么开、能装多大的游戏，
+   * 保存前统一收敛一次：手改 settings.json、旧版本残留的离谱值都在这里被拉回来，
+   * 免得开机时 qemu 因为 -memory 32 直接退出，或者分区填到比磁盘还大。
+   */
+  const sanitizeResourcePatch = (patch) => {
+    if (!patch || !patch.engine) return patch;
+    const res = require('./core/resources');
+    const host = res.hostProfile();
+    const eng = { ...patch.engine };
+    if ('memoryMB' in eng) {
+      const c = res.clampMemoryMB(eng.memoryMB, host.totalMB);
+      eng.memoryMB = c.mb;
+      if (c.mb > 0) eng.autoMemory = false;
+    }
+    if ('cores' in eng) eng.cores = res.clampCores(eng.cores, host.cores).cores;
+    if ('mumuMemoryGB' in eng) {
+      const c = res.clampMemoryMB(Number(eng.mumuMemoryGB) * 1024, host.totalMB);
+      eng.mumuMemoryGB = c.mb > 0 ? Math.round((c.mb / 1024) * 2) / 2 : 0;
+    }
+    if ('mumuCores' in eng) eng.mumuCores = res.clampCores(eng.mumuCores, host.cores).cores;
+    if ('dataPartitionGB' in eng) {
+      eng.dataPartitionGB = Math.max(0, Math.min(256, Number(eng.dataPartitionGB) || 0));
+    }
+    return { ...patch, engine: eng };
+  };
+
   ipcMain.handle('settings:get', () => store.getSettings());
-  ipcMain.handle('settings:set', (_e, patch) => {
+  ipcMain.handle('settings:set', (_e, rawPatch) => {
+    const patch = sanitizeResourcePatch(rawPatch);
     const next = store.saveSettings(patch);
     if (patch && patch.autoStart !== undefined) applyAutoStart();
     if (patch && patch.display && appWin && appWin.isOpen) {
@@ -1664,16 +1692,69 @@ function registerIpc() {
     return { response };
   });
 
+  /**
+   * 资源分配总览：宿主上限、当前分配、数据盘余量。
+   * 自带运行时与 MuMu 的落点不同（qemu 参数 vs performance_* 配置），
+   * 这里统一由各底座自己的 resources() 回答，界面只认这个结构。
+   */
+  ipcMain.handle('engine:resources', async () => {
+    try {
+      const backend = runtime.backend;
+      if (backend && typeof backend.resources === 'function') return await backend.resources();
+      return { backend: backend ? backend.id : '', ok: false, note: '当前底座不支持资源分配' };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  /**
+   * 就地扩容做不到时（quickboot 差量盘）走这条：按目标容量重建 /data。
+   * 会清空已装应用与存档 —— 调用方必须已经让用户明确确认过。
+   */
+  ipcMain.handle('runtime:resetAndResize', async (_e, gb) => {
+    const res = require('./core/resources');
+    const doctor = require('./core/doctor');
+    if (runtime.backend && runtime.backend.id !== 'builtin') {
+      return { ok: false, unsupported: true, error: '当前底座的数据盘由模拟器自己管理。' };
+    }
+    const freeMB = doctor.freeDiskMB(runtime.provisioner.paths().root);
+    const want = res.clampDataGB(gb, freeMB).gb;
+    if (!want) return { ok: false, error: '目标容量不合法' };
+    store.saveSettings({ engine: { dataPartitionGB: want } });
+    await runtime.stop().catch(() => {});
+    const r = await runtime.resetAndroidData().catch((e) => ({ ok: false, error: e.message }));
+    appLog(`reset+resize -> ${want}GB: ${JSON.stringify(r)}`);
+    return { ok: !!(r && r.ok), wantGB: want, ...r };
+  });
+
   // 数据分区（/data）容量：应用、游戏与它们的更新包都装在这里。
   // 「游戏更新提示空间不足」几乎都是这一项太小，扩容是就地做的，不丢数据。
   ipcMain.handle('runtime:dataInfo', () => {
     const doctor = require('./core/doctor');
-    const info = runtime.emulator.dataInfo();
-    return { ...info, freeDiskMB: doctor.freeDiskMB(runtime.provisioner.paths().root) };
+    const b = runtime.backend;
+    const info = (b && typeof b.dataInfo === 'function') ? (b.dataInfo() || {}) : {};
+    const freeDiskMB = Number(info.freeMB) || Number(info.freeDiskMB)
+      || doctor.freeDiskMB(runtime.provisioner.paths().root);
+    return { ...info, freeDiskMB };
   });
 
   ipcMain.handle('runtime:setDataSize', async (_e, gb) => {
-    const want = Math.max(0, Math.min(64, Number(gb) || 0));
+    // 第三方底座的数据盘归它自己管（MuMu 的 CLI 没有改容量的接口），
+    // 这里不能拿 ApkStart 自己的 userdata 镜像去「扩容」，否则改的是一份根本没人用的文件。
+    if (runtime.backend && runtime.backend.id !== 'builtin') {
+      const info = runtime.backend.dataInfo ? runtime.backend.dataInfo() : {};
+      return {
+        ok: false,
+        unsupported: true,
+        error: '当前底座的数据盘由模拟器自己管理，请在模拟器设置中心里扩容。',
+        ...info,
+      };
+    }
+    const res = require('./core/resources');
+    const doctor = require('./core/doctor');
+    const freeMB = doctor.freeDiskMB(runtime.provisioner.paths().root);
+    const clamped = res.clampDataGB(gb, freeMB);
+    const want = clamped.gb;
     store.saveSettings({ engine: { dataPartitionGB: want } });
     if (!want) {
       const info = runtime.emulator.dataInfo();

@@ -698,22 +698,68 @@ class EmulatorEngine {
     const img = path.join(dir, 'userdata-qemu.img');
     let bytes = 0;
     try { bytes = fs.statSync(img).size; } catch (_) { /* 还没建 */ }
+    let fsBytesNow = 0;
+    try { fsBytesNow = userdata.fsBytes(img); } catch (_) { /* 还没建或损坏 */ }
+    const configuredGB = Number(this.settings?.engine?.dataPartitionGB || 0);
+    const fsGB = fsBytesNow ? Number((fsBytesNow / 1073741824).toFixed(1)) : 0;
     return {
       avdDir: dir,
       imageBytes: bytes,
       imageGB: bytes ? Number((bytes / 1073741824).toFixed(1)) : 0,
-      configuredGB: Number(this.settings?.engine?.dataPartitionGB || 0),
+      // 文件系统实际大小（≠ 镜像文件大小）：扩了镜像但 resize2fs 没到位时这两个数会不一样
+      fsGB,
+      configuredGB,
+      // 用户设了目标、但文件系统还没长到目标
+      pendingGB: configuredGB && fsGB ? Math.max(0, configuredGB - fsGB) : 0,
+      // quickboot 会给 userdata 建一层 qcow2 覆盖层，guest 看到的是它，不是底座镜像
+      overlay: this._hasDataOverlay(img),
     };
+  }
+
+  /** userdata 是否被 quickboot 的 qcow2 覆盖层接管（有它就只能重置，不能就地扩容） */
+  _hasDataOverlay(img) {
+    try { return fs.existsSync(`${img}.qcow2`); } catch (_) { return false; }
   }
 
   /**
    * 立即把 /data 分区扩容到指定大小（必须保证模拟器已停止，否则镜像被占用）。
-   * 走的是 ensureDataPartition 的就地扩容路径：qemu-img resize + resize2fs，
-   * 不重建、不丢已装应用与存档。
+   *
+   * 两种路径，取舍是实测出来的：
+   *  - 没有 quickboot 覆盖层：就地扩（qemu-img resize + resize2fs），不丢已装应用；
+   *  - 有覆盖层：guest 真正挂载的是 `userdata-qemu.img.qcow2`，底座扩到 8GB、
+   *    文件系统也长到 8GB，guest 里 `df /data` 依旧是 5.7GB（覆盖层还是旧大小），
+   *    而覆盖层里的文件系统没有 root 权限改不了。这种时候必须如实返回「需要重置」，
+   *    不能再像以前那样返回成功 —— 用户会以为扩好了，装 50GB 游戏依旧半路失败。
    */
   resizeDataPartition(dataMB) {
     const dir = path.join(this.provisioner.paths().avdHome, `${AVD_NAME}.avd`);
-    return this.ensureDataPartition(dir, dataMB);
+    const img = path.join(dir, 'userdata-qemu.img');
+    const wantGB = Math.max(1, Math.round(Number(dataMB || 0) / 1024));
+    if (this._hasDataOverlay(img)) {
+      return {
+        ok: false,
+        needsReset: true,
+        fsGB: this.dataInfo().fsGB,
+        error: `安卓正在用快速启动的差量盘，就地扩容改不到它（目标 ${wantGB} GB）。`
+          + '需要「重置安卓数据」后按新容量重建 /data —— 已装应用和存档会被清空，请先确认。',
+      };
+    }
+    const r = this.ensureDataPartition(dir, dataMB);
+    // ensureDataPartition 在 resize2fs 失败时会返回 ok:false；再核一次文件系统大小，
+    // 防止「文件撑开了、文件系统没长」被当成功（用户看到的就是装游戏说空间不足）。
+    let fsAfter = 0;
+    try { fsAfter = userdata.fsBytes(img); } catch (_) { /* ignore */ }
+    const wantBytes = Math.max(1024, Math.round(Number(dataMB || 0))) * 1048576;
+    if (r && r.ok && fsAfter < wantBytes * 0.95) {
+      return {
+        ok: false,
+        ...r,
+        fsGB: Number((fsAfter / 1073741824).toFixed(1)),
+        error: `镜像已扩到 ${wantGB} GB，但文件系统只到 ${(fsAfter / 1073741824).toFixed(1)} GB（resize2fs 没成功）。`
+          + '可以再点一次「立即扩容」，或清理磁盘后重试。',
+      };
+    }
+    return r;
   }
 
   /**

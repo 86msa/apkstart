@@ -796,11 +796,59 @@ function syncBackendFields() {
   show('compatInstallField', builtin && !$('compatInstallField').hidden);
   show('setIdle', true);
   show('setDevice', mode === 'attach');
+  // 资源分配：自带运行时的「资源策略 / 画质 / 数据分区」只对自带底座有意义；
+  // MuMu 那套（performance_mode=custom）完全独立，混着显示只会让人改错地方。
+  const perf = $('perfGroup');
+  if (perf) perf.hidden = !builtin;
+  const mumuRes = $('mumuResGroup');
+  if (mumuRes) mumuRes.hidden = mode !== 'mumu';
+  refreshResources();
+}
+
+/** 本机 / MuMu 当前资源分配说明（设置页里那几行灰字） */
+async function refreshResources() {
+  const bNote = $('builtinResNote');
+  const mNote = $('mumuResNote');
+  const dNote = $('mumuDataNote');
+  if (!bNote && !mNote) return;
+  const gb = (mb) => (Number(mb) > 0 ? `${Math.round(Number(mb) / 1024)} GB` : '未知');
+  const r = await api.resources().catch(() => null);
+  if (!r || r.ok === false) {
+    const msg = (r && r.note) || '暂时读不到资源分配信息';
+    if (bNote) bNote.textContent = msg;
+    if (mNote) mNote.textContent = msg;
+    return;
+  }
+  const host = r.host || {};
+  const lim = r.limits || {};
+  const free = Number(r.freeMB) || Number((r.current && r.current.freeMB) || 0);
+  if (bNote && r.backend === 'builtin') {
+    bNote.textContent = `本机 ${gb(host.totalMB)} 内存 / ${host.cores} 核；`
+      + `内存最多可分 ${gb(lim.maxMB)}，核心最多 ${Math.max(1, (host.cores || 1) - 1)} 个（各留 1/4 内存与 1 核给 Windows）。`
+      + `数据分区上限 ${lim.maxGB || 0} GB${free ? `（所在磁盘剩余 ${(free / 1024).toFixed(1)} GB）` : ''}。`
+      + (r.verdict && r.verdict.note ? ` ${r.verdict.note}` : '');
+  }
+  if (mNote && r.backend === 'mumu') {
+    const cur = r.current || {};
+    const mem = cur.effectiveMemoryGB ? `${cur.effectiveMemoryGB} GB` : 'MuMu 默认';
+    const cores = cur.effectiveCores ? `${cur.effectiveCores} 核` : 'MuMu 默认';
+    mNote.textContent = `本机 ${gb(host.totalMB)} 内存 / ${host.cores} 核；内存最多可分 ${gb(lim.maxMB)}。`
+      + `MuMu 当前分配：${mem} / ${cores}。`
+      + (r.pending ? ' 新分配已保存，下次启动 MuMu 时生效。' : '')
+      + (r.verdict && r.verdict.note ? ` ${r.verdict.note}` : '');
+    if (dNote) {
+      dNote.textContent = free
+        ? `MuMu 数据盘所在分区剩余 ${(free / 1024).toFixed(1)} GB。${r.note || ''}`
+        : (r.note || '');
+    }
+  }
 }
 
 function fillSettings(s) {
   $('setEngineMode').value = s.engine.mode;
   if ($('setMumuPath')) $('setMumuPath').value = s.engine.mumuPath || '';
+  if ($('setMumuMemGB')) $('setMumuMemGB').value = String(Number(s.engine.mumuMemoryGB || 0));
+  if ($('setMumuCores')) $('setMumuCores').value = String(Number(s.engine.mumuCores || 0));
   if ($('setFydeosHost')) $('setFydeosHost').value = s.engine.fydeosHost || '';
   syncBackendFields();
   $('setAdbPath').value = s.adbPath || '';
@@ -858,10 +906,17 @@ async function refreshDataInfo() {
   const info = await api.dataInfo().catch(() => null);
   if (!info) { el.textContent = '读取数据分区信息失败'; return; }
   const auto = Number(($('setDataGB') || {}).value || 0) === 0;
-  const img = info.imageGB ? `${info.imageGB} GB` : '尚未创建';
+  // 有 quickboot 差量盘时底座镜像的大小不等于 guest 看到的容量（实测 8GB 镜像、guest 5.7GB），
+  // 与其显示一个会误导人的数字，不如明确说「以运行时为准」。
+  const img = info.overlay
+    ? '快速启动差量盘（实际容量以运行时 /data 为准）'
+    : (info.fsGB ? `实际文件系统 ${info.fsGB} GB` : (info.imageGB ? `${info.imageGB} GB` : '尚未创建'));
   const free = info.freeDiskMB ? `${(info.freeDiskMB / 1024).toFixed(1)} GB` : '未知';
-  el.textContent = `当前数据分区镜像：${img}${auto ? '（自动）' : ''} · 所在磁盘剩余 ${free}。`
-    + '游戏提示「存储空间不足」就把这里调大后点「立即扩容」——扩容是就地做的，已装应用与存档都保留。';
+  const pending = Number(info.pendingGB) > 0
+    ? ` 目标 ${info.configuredGB} GB 还没生效：安卓正在用快速启动差量盘，需要「重置安卓数据」后按新容量重建（会清空已装应用）。`
+    : '';
+  el.textContent = `当前数据分区：${img}${auto ? '（自动）' : ''} · 所在磁盘剩余 ${free}。${pending}`
+    + '游戏提示「存储空间不足」就把这里调大后点「立即扩容」；能就地扩容时不丢已装应用。';
 }
 
 async function openSettings() {
@@ -1044,6 +1099,22 @@ function bindSettings() {
   if ($('setMumuPath')) {
     $('setMumuPath').addEventListener('change', (e) => save({ engine: { mumuPath: e.target.value.trim() } }));
   }
+  // MuMu 实例的内存 / CPU：0 = 沿用 MuMu 原设置（默认，不动用户的模拟器配置）。
+  // 非 0 时下次开机会在启动前写进 MuMu 的 performance_* 配置，重启实例后生效。
+  if ($('setMumuMemGB')) {
+    $('setMumuMemGB').addEventListener('change', async (e) => {
+      await save({ engine: { mumuMemoryGB: Number(e.target.value) || 0 } });
+      await refreshResources();
+      toast({ title: 'MuMu 内存分配已保存', body: '下次启动 MuMu 时生效', type: 'ok' });
+    });
+  }
+  if ($('setMumuCores')) {
+    $('setMumuCores').addEventListener('change', async (e) => {
+      await save({ engine: { mumuCores: Number(e.target.value) || 0 } });
+      await refreshResources();
+      toast({ title: 'MuMu CPU 分配已保存', body: '下次启动 MuMu 时生效', type: 'ok' });
+    });
+  }
   if ($('setFydeosHost')) {
     $('setFydeosHost').addEventListener('change', (e) => save({ engine: { fydeosHost: e.target.value.trim() } }));
   }
@@ -1120,10 +1191,35 @@ function bindSettings() {
       const r = await api.setDataSize(gb).catch((e) => ({ ok: false, error: e.message }));
       $('btnGrowData').disabled = false;
       $('btnGrowData').textContent = old;
+      if (r && !r.ok && r.needsReset) {
+        // 快速启动的差量盘挡着：就地扩容做不到，只能按新容量重建 /data。
+        // 这是明确的数据丢失操作，必须单独再确认一次。
+        const again = await api.confirm({
+          title: '需要重置安卓数据才能扩容',
+          message: `安卓正在使用快速启动差量盘，就地扩容改不到它。要拿到 ${gb} GB 空间，必须按新容量重建 /data。`,
+          detail: '重建会清空已安装的应用与存档（模拟器本身和镜像不受影响）。确定继续吗？',
+          okLabel: '清空并重建',
+        });
+        if (again.response !== 1) { refreshDataInfo(); return; }
+        $('btnGrowData').disabled = true;
+        $('btnGrowData').textContent = '重建中…';
+        const rr = await api.resetAndResize(gb).catch((e) => ({ ok: false, error: e.message }));
+        $('btnGrowData').disabled = false;
+        $('btnGrowData').textContent = old;
+        toast({
+          type: rr && rr.ok ? 'ok' : 'error',
+          title: rr && rr.ok ? '已按新容量重建' : '重建失败',
+          body: rr && rr.ok
+            ? `下次打开应用会按 ${gb} GB 重建 /data（首次进入会多等几十秒）`
+            : (rr && rr.error) || '未知错误',
+        });
+        refreshDataInfo();
+        return;
+      }
       toast({
         type: r && r.ok ? 'ok' : 'error',
         title: r && r.ok ? '数据分区已扩容' : '扩容失败',
-        body: r && r.ok ? `现在约 ${r.imageGB || gb} GB 可用` : (r && r.error) || '未知错误',
+        body: r && r.ok ? `现在约 ${r.fsGB || r.imageGB || gb} GB 可用` : (r && r.error) || '未知错误',
       });
       refreshDataInfo();
     });

@@ -44,6 +44,8 @@ contextBridge.exposeInMainWorld('apkstart', {
   startupInfo: () => invoke('app:startupInfo'),
   dataInfo: () => invoke('runtime:dataInfo'),
   setDataSize: (gb) => invoke('runtime:setDataSize', gb),
+  resources: () => invoke('engine:resources'),
+  resetAndResize: (gb) => invoke('runtime:resetAndResize', gb),
   confirm: (opts) => invoke('app:confirm', opts || {}),
   displayState: () => invoke('display:state'),
   displaySet: (patch) => invoke('display:set', patch || {}),

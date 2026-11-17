@@ -43,6 +43,11 @@ const DEFAULT_SETTINGS = {
     mumuIndex: 0,            // MuMu 多开实例索引，默认 0 号
     // 黑屏自愈找到的可用渲染档位（dx-high / vk-high / dx-mid / ...）；空 = 自动挑选
     mumuRenderProfile: '',
+    // MuMu 实例的内存 / CPU 分配（用户可自行指定）。
+    // 0 = 沿用 MuMu 里原来的性能设置，不动用户的模拟器配置；
+    // >0 时开机前写 performance_mode=custom + performance_mem.custom / performance_cpu.custom。
+    mumuMemoryGB: 0,
+    mumuCores: 0,
     fydeosHost: '',          // FydeOS 安卓子系统地址（留空 = 依次试 arc:5555 / 100.115.92.2:5555 / 127.0.0.1:5555）
     qemuPath: '',
     systemImage: '',

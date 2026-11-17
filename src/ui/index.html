@@ -343,6 +343,44 @@
         </div>
       </div>
 
+      <div class="group" id="mumuResGroup" hidden>
+        <div class="group-title">MuMu 实例资源分配</div>
+        <div class="field two">
+          <div>
+            <label>内存（GB）</label>
+            <select id="setMumuMemGB">
+              <option value="0">沿用 MuMu 原设置</option>
+              <option value="2">2 GB</option>
+              <option value="4">4 GB</option>
+              <option value="6">6 GB</option>
+              <option value="8">8 GB</option>
+              <option value="12">12 GB</option>
+              <option value="16">16 GB</option>
+              <option value="24">24 GB</option>
+              <option value="32">32 GB</option>
+            </select>
+          </div>
+          <div>
+            <label>CPU 核心</label>
+            <select id="setMumuCores">
+              <option value="0">沿用 MuMu 原设置</option>
+              <option value="2">2 核</option>
+              <option value="4">4 核</option>
+              <option value="6">6 核</option>
+              <option value="8">8 核</option>
+              <option value="12">12 核</option>
+              <option value="16">16 核</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <span class="sub" id="mumuResNote">正在读取 MuMu 当前分配…</span>
+        </div>
+        <div class="field">
+          <span class="sub" id="mumuDataNote">正在读取 MuMu 数据盘余量…</span>
+        </div>
+      </div>
+
       <div class="group" id="perfGroup">
         <div class="group-title">性能与资源占用</div>
         <div class="field">
@@ -374,6 +412,11 @@
               <option value="12">12 GB</option>
               <option value="16">16 GB</option>
               <option value="24">24 GB</option>
+              <option value="32">32 GB</option>
+              <option value="48">48 GB</option>
+              <option value="64">64 GB（50GB 级游戏）</option>
+              <option value="96">96 GB</option>
+              <option value="128">128 GB</option>
             </select>
           </div>
         </div>
@@ -559,6 +602,9 @@
             <label>CPU 核心（0 = 自动）</label>
             <input id="setCores" type="number" min="0" max="16" />
           </div>
+        </div>
+        <div class="field">
+          <span class="sub" id="builtinResNote"></span>
         </div>
         <div class="field">
           <label>空闲回收（分钟，0 = 不回收）</label>

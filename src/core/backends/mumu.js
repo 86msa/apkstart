@@ -37,6 +37,10 @@ const {
   RENDER_PROFILES, parseGraphicsLog, recommendedProfiles, nextProfile,
   profileSettings, profileById, diskRequiredMB, diskVerdict,
 } = require('../mumu-compat');
+const {
+  hostProfile, memoryLimits, clampMemoryMB, clampCores, memVerdict,
+  mumuResourcePairs, parseMumuResources, diskLimits,
+} = require('../resources');
 
 /** 常见安装位置（按命中率排序）。用户在设置里填的路径优先。 */
 const CANDIDATE_ROOTS = [
@@ -530,6 +534,17 @@ class MumuBackend extends Backend {
     const initial = this._renderProfile || recommendedProfiles(host)[0];
     let info = await this.info({ fresh: true });
     const wasRunning = !!(info && info.is_android_started);
+    // 用户指定的内存 / CPU 必须赶在开机前写进 MuMu 配置（它只在启动阶段读）。
+    // 已经在跑的实例只提示「重启后生效」，不替用户重启。
+    const alloc = this.wantedAllocation();
+    if (alloc.memoryGB || alloc.cores) {
+      const r = await this.applyResources(alloc, { onLog });
+      if (!r.ok) {
+        onLog(`MuMu 资源分配没有写进去：${r.error}（继续用 MuMu 原来的设置）`);
+      } else if (r.applied && wasRunning) {
+        onLog('MuMu 资源分配已保存，正在运行的实例下次重启后生效');
+      }
+    }
     if (!wasRunning) {
       // 还没开机时把渲染档位先写进去。MuMu 只在开机阶段读这些配置，
       // 开机后再写要等下次重启才生效。
@@ -671,6 +686,86 @@ class MumuBackend extends Backend {
     return { ok: !!(r && (r.errcode === 0 || r === true)) };
   }
 
+  /**
+   * 用户给这台 MuMu 实例分配的内存 / CPU。
+   * 0 = 沿用 MuMu 里原来的性能设置（默认，绝不动用户已有配置）。
+   */
+  wantedAllocation() {
+    const s = (this.deps.store && this.deps.store.getSettings)
+      ? this.deps.store.getSettings() : {};
+    const e = (s && s.engine) || {};
+    const host = hostProfile();
+    // 设置页已经收敛过一次，这里再收一次：用户可能手改 settings.json
+    const mem = clampMemoryMB(e.mumuMemoryGB ? Number(e.mumuMemoryGB) * 1024 : 0, host.totalMB);
+    const cpu = clampCores(e.mumuCores, host.cores);
+    return { memoryGB: mem.mb > 0 ? Math.round((mem.mb / 1024) * 2) / 2 : 0, cores: cpu.cores };
+  }
+
+  /** 读 MuMu 实例当前实际分配（内存 GB / CPU 核 / 性能模式） */
+  async readResources() {
+    const all = await this.readSettings();
+    return parseMumuResources(all);
+  }
+
+  /**
+   * 把「内存 GB + 核心数」写进 MuMu 配置。
+   *
+   * MuMu 只在实例启动阶段读 performance_* 这几项，所以必须开机前写；
+   * 已经在运行的实例改了不会立刻变，要等下次重启 —— 这里只提示，不替用户重启
+   * （用户可能正开着游戏，重启就是掉线）。
+   */
+  async applyResources(alloc, { onLog = () => {} } = {}) {
+    const a = alloc || this.wantedAllocation();
+    const pairs = mumuResourcePairs(a.memoryGB, a.cores);
+    if (!pairs.length) return { ok: true, applied: false, reason: 'follow-mumu' };
+    const before = await this.readResources();
+    const same = pairs.every((p) => {
+      if (p.key === 'performance_mode') return String(before.mode) === String(p.value);
+      if (p.key === 'performance_cpu.custom') return before.customCores === Number(p.value);
+      return Math.abs(before.customMemoryGB - Number(p.value)) < 0.01;
+    });
+    if (same) return { ok: true, applied: false, unchanged: true, before };
+    const ok = await this.writeSettings(pairs);
+    if (!ok) {
+      return { ok: false, applied: false, error: 'MuMu 拒绝了资源设置（实例可能正在启动/关机，稍后重试）' };
+    }
+    const after = await this.readResources();
+    this._allocApplied = { ...a, at: Date.now() };
+    onLog(`MuMu 资源分配：${a.memoryGB ? `${a.memoryGB} GB 内存` : '内存沿用原值'}`
+      + ` / ${a.cores ? `${a.cores} 核` : 'CPU 沿用原值'}（重启实例后生效）`);
+    return { ok: true, applied: true, before, after };
+  }
+
+  /**
+   * 设置页展示用：宿主上限、用户想要的分配、MuMu 当前实际分配、数据盘余量。
+   */
+  async resources() {
+    const host = hostProfile();
+    const wanted = this.wantedAllocation();
+    let current = { mode: '', memoryGB: 0, cores: 0, customMemoryGB: 0, customCores: 0 };
+    try { current = await this.readResources(); } catch (_) { /* 读不到就留空 */ }
+    const freeMB = this.freeDataMB();
+    const effectiveMemoryGB = current.mode === 'custom' && current.customMemoryGB
+      ? current.customMemoryGB : current.memoryGB;
+    const effectiveCores = current.mode === 'custom' && current.customCores
+      ? current.customCores : current.cores;
+    const verdict = memVerdict(Math.round(effectiveMemoryGB * 1024), host.totalMB);
+    return {
+      backend: 'mumu',
+      host,
+      limits: { ...memoryLimits(host.totalMB), ...diskLimits(freeMB) },
+      wanted,
+      current: { ...current, effectiveMemoryGB, effectiveCores },
+      freeMB,
+      // 用户指定了、但 MuMu 里还没生效（需要重启实例）
+      pending: !!((wanted.memoryGB && wanted.memoryGB !== effectiveMemoryGB)
+        || (wanted.cores && wanted.cores !== effectiveCores)),
+      verdict,
+      note: 'MuMu 的数据盘由模拟器自己管理容量：这里只做余量检查和安装前预检，'
+        + '要改分区大小请用 MuMu 设置中心。',
+    };
+  }
+
   /** 数据盘所在分区的剩余空间（50GB 级游戏安装前必须知道） */
   freeDataMB() {
     if (!this.root) this.locate();
@@ -700,11 +795,15 @@ class MumuBackend extends Backend {
   dataInfo() {
     const info = this._info;
     const freeMB = this.freeDataMB();
+    const lim = diskLimits(freeMB);
     return {
       ok: !!(info && info.disk_size_bytes) || freeMB > 0,
       dataMB: info && info.disk_size_bytes ? Math.round(info.disk_size_bytes / (1024 * 1024)) : 0,
       freeMB,
-      note: '数据分区由 MuMu 管理；空间不足时请先清理磁盘或把 MuMu 数据盘挪到更大的分区。',
+      // 用户能填的数据分区上限（由宿主余量推导）；MuMu 自己管容量，这里只用于提示
+      maxGB: lim.maxGB,
+      note: `MuMu 数据盘所在分区剩余 ${(freeMB / 1024).toFixed(1)} GB。`
+        + '数据盘容量由 MuMu 设置中心管理；ApkStart 会在装大包前预检空间，不够会先提示而不是装到一半失败。',
     };
   }
 

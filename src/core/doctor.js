@@ -16,6 +16,7 @@ const path = require('path');
 const net = require('net');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
+const { memoryLimits } = require('./resources');
 
 const ASCII = /^[\x20-\x7e]*$/;
 const isAsciiPath = (p) => ASCII.test(String(p || ''));
@@ -195,10 +196,19 @@ function chooseProfile({
   if (host.freeMB && host.freeMB < memoryMB + 1024) {
     memoryMB = Math.max(2048, Math.floor((host.freeMB * 0.5) / 256) * 256);
   }
-  if (overrides.memoryMB) memoryMB = clamp(Number(overrides.memoryMB) || memoryMB, 1536, 8192);
+  if (overrides.memoryMB) {
+    // 上限跟着宿主走：早先写死 8192，结果 32GB 机器上也最多只能分 8GB，
+    // 大型游戏（尤其带高清资源包的）进场景就频繁回收贴图，表现是卡顿/黑屏。
+    const lim = memoryLimits(host.totalMB);
+    memoryMB = clamp(Number(overrides.memoryMB) || memoryMB, 1536, lim.maxMB);
+  }
 
   let cores = clamp(Math.floor(host.cores / 2), 2, 4);
-  if (overrides.cores) cores = clamp(Number(overrides.cores) || cores, 1, 8);
+  if (overrides.cores) {
+    // 同样跟着宿主：至少留 1 核给 Windows，单核机器仍然给 1 核
+    const maxCores = Math.max(1, (host.cores || 1) - 1);
+    cores = clamp(Number(overrides.cores) || cores, 1, maxCores);
+  }
   // 用户没手动指定核数时才由轻量模式收敛，手动值永远优先
   const lite = settings ? liteProfile({ host, engine: settings.engine || {} }) : null;
   if (lite && !overrides.cores) cores = Math.min(cores, lite.cores);
@@ -208,8 +218,14 @@ function chooseProfile({
   // （表现就是应用内更新时提示「磁盘空间不足」）。默认按磁盘余量给 6/8GB，
   // 用户也可以直接在设置里指定（改大后下次开机就地扩容，不丢数据）。
   const wantGB = Number((settings && settings.engine && settings.engine.dataPartitionGB) || 0);
-  const autoDataMB = disk && disk < 12288 ? 4096 : 6144;
-  const dataMB = wantGB > 0 ? clamp(Math.round(wantGB * 1024), 2048, 65536) : autoDataMB;
+  // 自动值也跟磁盘余量走：50GB 级游戏解包后接近 90GB，余量大的机器给 16GB 起步，
+  // 免得装完第一个大游戏就开始报「空间不足」。
+  const autoDataMB = disk && disk < 12288 ? 4096 : (disk && disk > 262144 ? 16384 : 6144);
+  // 用户指定时按「所在磁盘的 80%」封顶：填 128GB 但盘里只有 20GB，只会装到一半失败
+  const dataMaxMB = disk ? Math.max(2048, Math.floor((disk * 0.8) / 1024) * 1024) : 262144;
+  const dataMB = wantGB > 0
+    ? clamp(Math.round(wantGB * 1024), 2048, Math.min(262144, dataMaxMB))
+    : autoDataMB;
 
   const gpus = gpuCandidates(emulatorVersion);
   const gpu = overrides.gpuMode && gpus.includes(overrides.gpuMode) ? overrides.gpuMode : gpus[0];
