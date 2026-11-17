@@ -67,7 +67,10 @@ class AppWindow {
   _area() {
     const d = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
     const a = d.workArea || d.bounds;
-    return { x: a.x, y: a.y, w: a.width, h: a.height };
+    // workArea 是 DIP（逻辑像素）。窗口代理进程是 per-monitor DPI-aware 的，
+    // SetWindowPos 收的是物理像素，所以独立窗口模式把这里的值交给 agent.layout
+    // 之前必须乘 sf 换算。sf 与 area 取自同一块屏幕，多显示器也不会用错缩放比。
+    return { x: a.x, y: a.y, w: a.width, h: a.height, sf: d.scaleFactor || 1 };
   }
 
   /**
@@ -97,6 +100,24 @@ class AppWindow {
     } catch (_) {
       return 1;
     }
+  }
+
+  /**
+   * 把一块 DIP（逻辑像素）矩形换算成物理像素，供窗口代理的 SetWindowPos 使用。
+   * Electron 的 screen/BrowserWindow 坐标一律是 DIP；而 agent.ps1 顶层声明了
+   * per-monitor v2 DPI 感知，Win32 的 SetWindowPos 收到的是物理像素。二者混用
+   * 在 125%/150% 缩放下就是「窗口只显示一半 / 偏到角落 / 点击错位」的根因
+   * （issue #99）。_rect() 早已乘过 sf，这里补上独立窗口模式缺的这一环。
+   */
+  _physical(rect, sf) {
+    const k = sf || this._scale();
+    if (!k || k === 1) return rect;
+    return {
+      x: Math.round(rect.x * k),
+      y: Math.round(rect.y * k),
+      w: Math.round(rect.w * k),
+      h: Math.round(rect.h * k),
+    };
   }
 
   /**
@@ -357,7 +378,10 @@ class AppWindow {
       x = Math.round(area.x + (area.w - w) / 2);
       y = Math.round(area.y + 60);
     }
-    const lay = await this.agent.layout({ x, y, w, h })
+    // area/x/y/w/h 都是 Electron 的 DIP 逻辑像素，而窗口代理的 SetWindowPos 收
+    // 物理像素。150% 缩放下不换算，窗口就只有 2/3 大并偏左上角——即 issue #99
+    // 的「显示一半」。_rect()（嵌入模式）早已乘过 sf，这里补齐独立模式的缺口。
+    const lay = await this.agent.layout(this._physical({ x, y, w, h }, area.sf))
       .catch((e) => ({ ok: false, error: e.message }));
     this._detachedDebug += ` layout=${JSON.stringify(lay)}`;
     this.lastEmbedError = this._detachedDebug;
@@ -515,7 +539,7 @@ class AppWindow {
           }
         } catch (_) { /* 拿不到就还原时用默认 */ }
         this._detachedFullscreen = true;
-        await this.agent.layout({ x: area.x, y: area.y, w: area.w, h: area.h })
+        await this.agent.layout(this._physical({ x: area.x, y: area.y, w: area.w, h: area.h }, area.sf))
           .catch(() => {});
       }
       return;
@@ -536,11 +560,11 @@ class AppWindow {
     let w = maxW;
     let h = Math.round(w / ratio);
     if (h > maxH) { h = maxH; w = Math.round(h * ratio); }
-    await this.agent.layout({
+    await this.agent.layout(this._physical({
       x: Math.round(area.x + (area.w - w) / 2),
       y: Math.round(area.y + 60),
       w, h,
-    }).catch(() => {});
+    }, area.sf)).catch(() => {});
   }
 
   minimize() {

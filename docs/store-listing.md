@@ -1,4 +1,4 @@
-# Microsoft Store 提交材料（ApkStart 0.5.3）
+# Microsoft Store 提交材料（ApkStart 0.5.4）
 
 > 这份文件是给 Partner Center 表单直接复制用的。包体、图标、清单由脚本产出，
 > 只有「注册账号 → 预留名称 → 上传 → 送审」必须在网页上人工完成。
@@ -12,7 +12,7 @@
 | Product name | `ApkStart` |
 | Category | Developer tools → Utilities & tools（备选：Productivity） |
 | Price | Free |
-| Package | `dist/store/ApkStart_0.5.3.0_x64.msix`（x64，约 850 MB） |
+| Package | `dist/store/ApkStart_0.5.4.0_x64.msix`（x64，约 850 MB） |
 | 支持语言 | 简体中文 / English (United States) |
 | 官网 | https://github.com/RoutineMiku/apkstart |
 | 支持邮箱 | <!-- 填你的邮箱 --> |
@@ -22,7 +22,14 @@
 
 **中文**
 ```
-0.5.3：
+0.5.4：
+· 修复在 125% / 150% 等非 100% 缩放的屏幕上，独立窗口只显示一部分并偏离角落、点击错位的问题。
+· 修复冷启动时被「允许 USB 调试」授权框卡住、误报显卡/虚拟化问题导致开机超时。
+· 修复 PackageManager 报告「已安装」但应用文件已丢失、导致应用打不开的问题。
+· 修复便携版更新后不重启、反复重新下载的死循环；一键卸载现已正确识别安装版。
+· 加强 APK 包名与压缩包解压校验，拒绝恶意路径写入与命令注入。
+
+0.5.3（已包含）：
 · 安卓应用的桌面 / 开始菜单快捷方式恢复使用**该应用自己的图标**，不再显示 ApkStart 的品牌图标。
 · 把应用固定到任务栏时，任务栏按钮与固定项使用同一个应用图标（每个应用独立身份）。
 · 运行器自己的 exe 写入了品牌图标与版本信息，资源管理器里不再显示 Electron 的默认图标和 33.x 版本号。
@@ -42,7 +49,14 @@
 
 **English**
 ```
-0.5.3:
+0.5.4:
+· Fixed detached windows showing only partially, sitting off-corner, and misaligned clicks on displays scaled above 100% (125%/150%).
+· Fixed cold boot stalling on the "Allow USB debugging" dialog and being misreported as a graphics/virtualization failure.
+· Fixed apps that PackageManager reported as installed but whose files were missing and would not launch.
+· Fixed portable updates that never restarted and re-downloaded in a loop; one-click uninstall now recognizes installed builds.
+· Hardened APK package-name and archive-extraction checks against malicious paths and command injection.
+
+0.5.3 (included):
 · Desktop and Start menu shortcuts for Android apps now use each app's own icon again,
   instead of ApkStart's brand icon.
 · Pinning an app to the taskbar keeps the same app icon on both the pinned shortcut and
@@ -265,7 +279,7 @@ Notes:
    ```powershell
    node build/msix.js --identity "<Identity/Name>" --publisher "<Identity/Publisher>"
    ```
-4. **Packages** → 上传 `dist/store/ApkStart_0.5.3.0_x64.msix`，等待校验通过。
+4. **Packages** → 上传 `dist/store/ApkStart_0.5.4.0_x64.msix`，等待校验通过。
 5. **Store listing** → 填第 2–5 节的内容、上传截图、选分类。
 6. **Pricing and availability** → Free，市场选中国 + 全球。
 7. **Submission options** → 粘贴第 6 节的 certification notes。
