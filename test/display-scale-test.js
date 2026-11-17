@@ -17,7 +17,9 @@
 const assert = require('assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { AppWindow } = require('../src/core/appwin');
+// 只 require 零依赖的纯换算模块——CI 用 ELECTRON_SKIP_BINARY_DOWNLOAD=1，
+// 直接 require appwin.js 会因 electron 二进制缺失而抛错（这正是本测试最初的坑）。
+const { physicalRect } = require('../src/core/geometry');
 
 let passed = 0;
 let failed = 0;
@@ -26,47 +28,46 @@ function test(name, fn) {
   catch (e) { failed++; console.error(`  ✗ ${name}\n    ${e.message}`); }
 }
 
-// 造一个不走构造函数的实例，只测纯换算逻辑（不碰 Electron）
-function win() { return Object.create(AppWindow.prototype); }
-
 (() => {
   console.log('\n[issue #99 · DIP → 物理像素换算]');
 
   test('100% 缩放：矩形原样返回（同一对象，零开销）', () => {
-    const w = win();
     const r = { x: 100, y: 60, w: 1280, h: 720 };
-    assert.equal(w._physical(r, 1), r, 'sf=1 应直接返回原对象');
-    assert.equal(w._physical(r, 0), r, 'sf 缺失回退也不改');
+    assert.equal(physicalRect(r, 1), r, 'sf=1 应直接返回原对象');
+    assert.equal(physicalRect(r, 0), r, 'sf 缺失回退也不改');
   });
 
   test('150% 缩放：宽高与坐标一起放大，四舍五入', () => {
-    const w = win();
-    assert.deepEqual(w._physical({ x: 100, y: 60, w: 1280, h: 720 }, 1.5),
+    assert.deepEqual(physicalRect({ x: 100, y: 60, w: 1280, h: 720 }, 1.5),
       { x: 150, y: 90, w: 1920, h: 1080 });
   });
 
   test('125% 缩放：出现小数时按最近整数取整', () => {
-    const w = win();
-    assert.deepEqual(w._physical({ x: 33, y: 41, w: 1001, h: 777 }, 1.25),
+    assert.deepEqual(physicalRect({ x: 33, y: 41, w: 1001, h: 777 }, 1.25),
       { x: Math.round(33 * 1.25), y: Math.round(41 * 1.25), w: Math.round(1001 * 1.25), h: Math.round(777 * 1.25) });
   });
 
   test('负坐标（-8 灰边溢出）同样按比例换算，不丢符号', () => {
-    const w = win();
-    assert.deepEqual(w._physical({ x: -8, y: 30 - 8, w: 900, h: 500 }, 2),
+    assert.deepEqual(physicalRect({ x: -8, y: 30 - 8, w: 900, h: 500 }, 2),
       { x: -16, y: 44, w: 1800, h: 1000 });
   });
 
   test('全屏铺满：workArea DIP × sf = 物理分辨率', () => {
-    const w = win();
     // 150% 缩放下 1920×1080 物理屏的 workArea 约 1280×693 DIP
-    const phys = w._physical({ x: 0, y: 0, w: 1280, h: 693 }, 1.5);
+    const phys = physicalRect({ x: 0, y: 0, w: 1280, h: 693 }, 1.5);
     assert.equal(phys.w, 1920);
     assert.equal(phys.h, Math.round(693 * 1.5)); // ≈ 1040，留给任务栏
   });
 
   console.log('\n[源码级 · 独立窗口模式所有 layout 都接入换算]');
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'core', 'appwin.js'), 'utf8');
+
+  test('appwin._physical 委托给零依赖的 geometry.physicalRect', () => {
+    assert(/require\('\.\/geometry'\)/.test(src), 'appwin 应引入 geometry');
+    const start = src.indexOf('_physical(rect, sf) {');
+    const body = src.slice(start, start + 200);
+    assert(/physicalRect\(rect/.test(body), '_physical 必须调用 physicalRect（测的才是真实实现）');
+  });
 
   test('_area() 返回 sf，且与 area 取自同一块屏幕', () => {
     const fn = src.slice(src.indexOf('_area() {'), src.indexOf('_scale() {'));

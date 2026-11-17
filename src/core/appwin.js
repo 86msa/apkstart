@@ -11,6 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const { hookOptions } = require('./pointer');
 const store = require('./store');
+const { physicalRect } = require('./geometry');
 
 const TITLEBAR_H = 38;
 /**
@@ -110,14 +111,7 @@ class AppWindow {
    * （issue #99）。_rect() 早已乘过 sf，这里补上独立窗口模式缺的这一环。
    */
   _physical(rect, sf) {
-    const k = sf || this._scale();
-    if (!k || k === 1) return rect;
-    return {
-      x: Math.round(rect.x * k),
-      y: Math.round(rect.y * k),
-      w: Math.round(rect.w * k),
-      h: Math.round(rect.h * k),
-    };
+    return physicalRect(rect, sf || this._scale());
   }
 
   /**
