@@ -12,6 +12,21 @@ const { URL } = require('url');
 
 const UA = 'ApkStart/0.2 (Windows; +https://github.com/apkstart)';
 
+/**
+ * 校验服务器返回的 Content-Range 是否与本次请求一致。
+ * 断点续传/分块下载最怕「服务器不认 Range、从头发整包」或「返回了别的文件的分块」——
+ * 直接写进目标文件会拼出看似完整、实则损坏的包。这里逐项比对起止位、总大小和
+ * Content-Length，有任何不符就拒绝，交给上层换源/重来。
+ */
+function validRange(res, start, end, total) {
+  const m = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(String(res.headers['content-range'] || ''));
+  if (!m) return false;
+  const [a, b, size] = m.slice(1).map(Number);
+  const length = res.headers['content-length'];
+  return Number.isSafeInteger(size) && a === start && b === end && size === total &&
+    (length == null || Number(length) === end - start + 1);
+}
+
 function openStream(url, { method = 'GET', headers = {}, redirects = 0 } = {}) {
   return new Promise((resolve, reject) => {
     if (redirects > 6) return reject(new Error('重定向次数过多'));
@@ -60,13 +75,16 @@ function sha256File(file) {
 }
 
 /**
- * 丢弃一次失败下载留下的所有残余（半截文件 + 分块边车）。
+ * 丢弃一次失败下载留下的所有残余。
  *
- * 「一直重复下载」的根因：以前所有失败路径都只抛异常、不删文件，于是 tmp 里
- * 永远躺着一个半截 zip + .chunks.json。下次进来看到已有文件就带 Range 续传，
- * 一旦服务器/源给的总大小或分块方式和上次不一致，拼不出正确字节 → 又失败 →
- * 又留半截……每次打开都在重下同一个包。断点续传本身没错，但必须限定在「确认
- * 能续」的场景；一旦这次判定失败就整包作废，下次干净重来。
+ * 这是「一直重复下载」的根因：以前所有失败路径都只抛异常、不删文件，
+ * 于是 tmp 里永远躺着一个半截 zip + 一份 .chunks.json 边车。下次进来
+ * downloadParallel/download 看到已有文件就带 Range 续传，可服务器给的
+ * 总大小/分块方式只要和上次不一样，就会继续失败 → 又留下半截文件 →
+ * 无限循环。用户看到的是「每次打开都在重新下载同一个包」。
+ *
+ * 保留断点续传的价值没错，但必须限定在「确认能续」的场景；一旦这次
+ * 下载判定失败，就整包作废，下次干净重来。
  */
 function discardPartial(dest) {
   for (const p of [dest, `${dest}.chunks.json`, `${dest}.part`]) {
@@ -97,14 +115,29 @@ async function download(url, dest, opt = {}) {
 
     if (res.statusCode === 416) {
       res.resume();
-      // 已下载完整
-      break;
+      // 416 有两种可能：文件真的下完了，或本地残片与目标对不上（服务器认为这个
+      // Range 不合法）。以前无条件当成功，会把坏残片留成"已下载"。这里只要带过
+      // Range 且还能重试，就清掉残片重新完整拉一遍；重试用尽仍未成功则报错。
+      if (existing > 0 && attempt <= retries + 1) {
+        discardPartial(dest);
+        continue;
+      }
+      throw new Error('无法验证续传文件，服务器返回 HTTP 416');
     }
     if (res.statusCode !== 200 && res.statusCode !== 206) {
       res.resume();
       if (attempt <= retries) { await new Promise((r) => setTimeout(r, 1500)); continue; }
       discardPartial(dest);   // 重试耗尽：别把坏文件留给下次续传
       throw new Error(`下载失败 HTTP ${res.statusCode}: ${url}`);
+    }
+
+    if (res.statusCode === 206) {
+      const m = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(String(res.headers['content-range'] || ''));
+      if (!m || !validRange(res, existing, Number(m[2]), Number(m[3])) || Number(m[2]) !== Number(m[3]) - 1) {
+        res.resume();
+        discardPartial(dest);
+        throw new Error('服务器返回了不匹配的续传范围');
+      }
     }
 
     const total = res.statusCode === 206
@@ -173,7 +206,8 @@ async function download(url, dest, opt = {}) {
         res.on('close', () => { if (!res.complete) finish(new Error('连接被中断')); });
       });
     } catch (e) {
-      discardPartial(dest);   // 中断 / 超时 / 写盘失败：半截文件留着只会让下次续传继续失败
+      // 中断 / 超时 / 写盘失败：半截文件留着只会让下次续传继续失败
+      discardPartial(dest);
       throw e;
     }
 
@@ -193,8 +227,9 @@ async function download(url, dest, opt = {}) {
   }
   return { file: dest, size: fs.statSync(dest).size };
   } catch (e) {
-    // openStream 直接 reject（连接被拒 / DNS 失败 / 超时）不会进入写流那段
-    // try/catch —— 统一在最外层兜住：任何抛出都先丢弃残余。
+    // openStream 直接 reject（连接被拒 / DNS 失败 / 超时）时不会进入写流那段
+    // try/catch —— 以前这里什么都不清，半截文件留着让下次续传继续失败。
+    // 统一在最外层兜住：任何抛出都先丢弃残余。
     discardPartial(dest);
     throw e;
   }
@@ -276,6 +311,10 @@ async function downloadParallel(url, dest, opt = {}) {
       res.resume();
       throw new Error(`分块请求被拒绝 HTTP ${res.statusCode}`);
     }
+    if (!validRange(res, c.pos, c.end, total)) {
+      res.resume();
+      throw new Error('服务器返回了不匹配的分块范围');
+    }
     await new Promise((resolve, reject) => {
       // 必须自己兜住「promise 永远不 settle」：res.destroy(err) 在某些情况下只发
       // close 不发 error，没有这个 guard 的话一整块会挂死，整个下载停在那里不动。
@@ -292,6 +331,12 @@ async function downloadParallel(url, dest, opt = {}) {
         idle = setTimeout(() => { res.destroy(); finish(new Error('连接停滞（长时间无数据）')); }, idleMs);
       };
       res.on('data', (buf) => {
+        // 服务器可能返回超出请求分块范围的数据，多出来的字节会写穿到别的分块，
+        // 拼出一个静默损坏的包。宁可判失败换源，不能让它落盘。
+        if (buf.length > c.end - c.pos + 1) {
+          res.destroy();
+          return finish(new Error('分块响应超出请求范围'));
+        }
         try {
           fs.writeSync(fd, buf, 0, buf.length, c.pos);
         } catch (e) {
@@ -346,7 +391,7 @@ async function downloadParallel(url, dest, opt = {}) {
 async function downloadAny(urls, dest, opt = {}) {
   const errors = [];
   for (const u of urls) {
-    discardPartial(dest);   // 换源前清掉上一个源的半截文件（跨源字节不可混用）
+    discardPartial(dest);   // 换源前清掉上一个源的半截文件
     try {
       // eslint-disable-next-line no-await-in-loop
       const r = await download(u, dest, opt);
@@ -490,6 +535,10 @@ async function downloadMulti(urls, dest, opt = {}) {
       res.resume();
       throw new Error(`分块被拒绝 HTTP ${res.statusCode}`);
     }
+    if (!validRange(res, c.pos, c.end, total)) {
+      res.resume();
+      throw new Error('服务器返回了不匹配的分块范围');
+    }
     const startPos = c.pos;
     const startedAt = Date.now();
     // 同一条连接 destroy 之后仍可能再收到已缓冲的包，会重复触发换源、把源跳过头，
@@ -513,6 +562,11 @@ async function downloadMulti(urls, dest, opt = {}) {
         idle = setTimeout(() => { res.destroy(); finish(new Error('连接停滞（无数据超时）')); }, idleMs);
       };
       res.on('data', (buf) => {
+        // 同上：拒绝超出请求范围的字节，避免静默写坏分块
+        if (buf.length > c.end - c.pos + 1) {
+          res.destroy();
+          return finish(new Error('分块响应超出请求范围'));
+        }
         try {
           fs.writeSync(fd, buf, 0, buf.length, c.pos);
         } catch (e) {
@@ -591,7 +645,9 @@ async function downloadMulti(urls, dest, opt = {}) {
 async function downloadAnyParallel(urls, dest, opt = {}) {
   const errors = [];
   for (const u of urls) {
-    discardPartial(dest);   // 换源前清掉上一个源的半截文件
+    // 换源前必须清掉上一个源留下的半截文件：不同源压出来的包字节可能不同，
+    // 拿 A 源的半成品去续传 B 源，拼出来一定是坏文件（校验又失败 → 再重下）。
+    discardPartial(dest);
     try {
       // eslint-disable-next-line no-await-in-loop
       const r = await downloadParallel(u, dest, opt);
@@ -606,5 +662,5 @@ async function downloadAnyParallel(urls, dest, opt = {}) {
 
 module.exports = {
   download, downloadAny, downloadParallel, downloadAnyParallel, downloadMulti,
-  head, sha256File, openStream, discardPartial,
+  head, sha256File, openStream, discardPartial, validRange,
 };

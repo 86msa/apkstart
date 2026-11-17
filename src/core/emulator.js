@@ -197,6 +197,29 @@ class EmulatorEngine {
    * 下一次启动就会 FATAL "Running multiple emulators with the same AVD"。
    * 按「AVD 锁里的 pid」+「命令行带本 AVD 名的 qemu/emulator」两个来源清。
    */
+  /**
+   * 当前 AVD 面板是横的还是竖的。
+   *
+   * 为什么要问这个：横屏**只能靠物理面板**实现 —— `wm size` 只改逻辑分辨率，画面会
+   * 躺倒 90°；`adb emu rotate` 只转内容，系统里还是竖屏。真正生效的是
+   * `hw.lcd.width/height` 互换 + 重启。而 config.ini 是每次开机时按当时的设置写的，
+   * 所以读它就知道**现在跑着的这台**是什么方向。
+   *
+   * @returns {boolean|null} true=横屏面板，false=竖屏面板，null=读不到
+   */
+  panelLandscape() {
+    try {
+      const avdDir = path.join(this.provisioner.paths().avdHome, `${AVD_NAME}.avd`);
+      const cfg = fs.readFileSync(path.join(avdDir, 'config.ini'), 'utf8');
+      const w = Number((/^hw\.lcd\.width=(\d+)$/m.exec(cfg) || [])[1]);
+      const h = Number((/^hw\.lcd\.height=(\d+)$/m.exec(cfg) || [])[1]);
+      if (!w || !h) return null;
+      return w > h;
+    } catch (_) {
+      return null;
+    }
+  }
+
   async killOrphanProcesses({ onLog = () => {} } = {}) {
     if (process.platform !== 'win32') return 0;
     const avdDir = path.join(this.provisioner.paths().avdHome, `${AVD_NAME}.avd`);
@@ -360,6 +383,13 @@ class EmulatorEngine {
       'hw.gpu.enabled=yes',
       `hw.gpu.mode=${gpu}`,
       'hw.keyboard=yes',
+      // 虚拟 Wi-Fi 必须显式打开。API 34 的 Play Store 镜像上网走的是
+      // wlan0（netsim 虚拟网卡），不是早期的 eth0。config.ini 里少了这一行，
+      // 模拟器就不会给 wlan0 建链路——表现是 wlan0 一直 NO-CARRIER、
+      // `dumpsys connectivity` 显示 Active default network: none，应用里就是
+      // 一直「网络错误，请稍后再试」。命令行的 -netdelay/-netspeed/-dns-server
+      // 都只是 QEMU 用户态 NAT 的参数，跟 guest 内部的网卡有没有被拉起来无关。
+      'hw.wifi=yes',
       'hw.lcd.width=' + screen.w,
       'hw.lcd.height=' + screen.h,
       'hw.lcd.density=' + screen.dpi,
@@ -496,6 +526,16 @@ class EmulatorEngine {
     };
   }
 
+  /**
+   * 要注入的系统语言。默认简体中文；用户可在设置里改（engine.locale），
+   * 设成 'en-US' 或 'off' 就回到镜像原生英文。
+   */
+  _guestLocale() {
+    const v = String(this.settings?.engine?.locale || 'zh-CN').trim();
+    if (!v || v === 'off' || /^false$/i.test(v)) return '';
+    return v;
+  }
+
   buildArgs({
     headless = true, accel = 'auto', port = 5554,
     gpu = 'software', memoryMB = 2048, cores = 2,
@@ -504,8 +544,7 @@ class EmulatorEngine {
     const args = [
       '-avd', AVD_NAME,
       '-port', String(port),
-      // 音频：默认开启（让安卓应用的提示音/视频声音能放出来）。
-      // 仅当用户在设置里显式关闭时才传 -no-audio 省一点 CPU。
+      // 音频：默认开启（让安卓应用的提示音/视频声音能放出来）。      // 仅当用户在设置里显式关闭时才传 -no-audio 省一点 CPU。
       ...(this.settings?.engine?.audio === false ? ['-no-audio'] : []),
       '-no-boot-anim',
       '-no-metrics',
@@ -525,6 +564,14 @@ class EmulatorEngine {
     // 显式声明不限速：默认值虽然是 full，但某些 -gpu / -net 组合下会被带上
     // 模拟器的保守配置，视频类应用（红果、抖音）首屏就会明显慢半拍。
     args.push('-netdelay', 'none', '-netspeed', 'full');
+    // 系统语言：默认简体中文。
+    // 实测 `-prop persist.sys.locale=zh-CN` 完全无效 —— 模拟器会拦截 persist.sys.*
+    // 这类受保护属性，ro.product.locale 又被镜像 build.prop 覆盖；guest 里 getprop
+    // 一个都看不到。官方专门给了 -change-locale：它会真正改系统语言并重启 framework，
+    // 且会写进 /data，从快照恢复也能保留。
+    // 用户可在设置里改成其它 locale 或关掉（engine.locale='off'）。
+    const locale = this._guestLocale();
+    if (locale) args.push('-change-locale', locale);
     // DNS：安卓默认用 10.0.2.3（转发到主机 DNS）。主机走 VPN / 公司网 / 某些运营商
     // 时，一次解析能拖到几百毫秒，表现为「页面转圈半天才开始加载」。给一份国内公共
     // DNS 作为首选，失败时系统仍会回退。用户可在设置里关掉（内网域名场景）。
@@ -804,7 +851,8 @@ class EmulatorEngine {
   async checkNetwork(adbPath = '', { waitMs = 0, interval = 3000 } = {}) {
     const fs = require('fs');
     const path = require('path');
-    let adb = adbPath || '';
+    // 同 repairWifi：防住「把函数当路径传进来」这种调用错误
+    let adb = typeof adbPath === 'function' ? adbPath() : (adbPath || '');
     if (!adb) {
       try { adb = this.provisioner.adbVersionPath() || ''; } catch (_) { adb = ''; }
     }
@@ -855,7 +903,111 @@ class EmulatorEngine {
     }
     const ip = ips[0];
     const gw = /^10\.0\.2\./.test(ip) ? '10.0.2.2' : ip.replace(/\.\d+$/, '.1');
-    return { ok: true, reason: '', gateway: gw, ip, wifiConnected: connected };
+    // 有 IP 不等于能上网。实测拿到 10.0.2.16 但 DNS/路由被掐时，应用首页还是
+    // 「网络错误」，而上层却以为网络正常。这里补一次真实 HTTP 探测。
+    // 用 nc 直连 80 端口而不是 ping：QEMU 用户态 NAT 会拦 ICMP，ping 必然误报。
+    // 只在「等待网络就绪」那条路径（waitMs>0）上做，快速轮询跳过——否则每 3 秒
+    // 就要花 4 秒探测，反而把启动拖慢。结论放进 reachable，不改 ok：有 IP 就先
+    // 让应用起来，一次 DNS 抖动不该卡住整个启动。
+    let reachable = null;
+    if (waitMs > 0) {
+      const probe = await sh(
+        "echo -e 'GET /generate_204 HTTP/1.0\\r\\nHost: connect.rom.miui.com\\r\\n\\r\\n' "
+        + "| nc -w 4 connect.rom.miui.com 80 2>/dev/null | head -1",
+        7000,
+      );
+      reachable = /HTTP\/1\.[01]\s+204/.test(probe);
+    }
+    return { ok: true, reason: '', gateway: gw, ip, wifiConnected: connected, reachable };
+  }
+
+  /**
+   * 把「已保存但不会自动连」的 AndroidWifi 主动连上。
+   *
+   * 这是实机踩出来的：模拟器自带的虚拟热点 AndroidWifi 在配置库里可能落成
+   * 两条记录（open + owe），系统据此判定为
+   *   「Saved / Won't automatically connect」
+   * 于是开机后 wlan0 永远 NO-CARRIER，应用里一直报网络错误。
+   *
+   * 麻烦的是 shell（uid 2000）没有 NETWORK_SETTINGS 权限，
+   * `cmd wifi connect-network` 会直接抛 SecurityException，所以不能走命令行。
+   * 这里改为拉起 Wi-Fi 设置页、点一下那条已保存的网络——和用户手动点的效果一样。
+   *
+   * @returns {Promise<boolean>} 是否已连上
+   */
+  async repairWifi(adbPath = '') {
+    const fs = require('fs');
+    const path = require('path');
+    // 防御：调用方可能误把函数本身传进来（rt.adbPath 是个方法）。
+    let adb = typeof adbPath === 'function' ? adbPath() : (adbPath || '');
+    if (!adb) {
+      try { adb = path.join(this.locate().root, 'platform-tools', 'adb.exe'); } catch (_) { adb = ''; }
+    }
+    if (!adb || !fs.existsSync(adb)) adb = 'adb';
+    const port = Number(process.env.ANDROID_ADB_SERVER_PORT) || this.adbPort || 5044;
+    const env = { ...process.env, ANDROID_ADB_SERVER_PORT: String(port) };
+    const sh = (cmd, timeout = 10000) => new Promise((resolve) => {
+      try {
+        execFile(adb, ['-s', this.serial, 'shell', cmd], { timeout, windowsHide: true, env }, (e, out) => {
+          resolve(e ? '' : String(out || ''));
+        });
+      } catch (_) { resolve(''); }
+    });
+    // 连上之后顺手把「联网验证」的探测地址换成国内可达的。
+    // 安卓默认拿 connectifitycheck.gstatic.com 判断「是否真能上网」，国内连不上它，
+    // 系统就一直给网络打「!」标记（已连接但无法访问互联网）。部分应用会因此
+    // 自我判定为离线、拒绝加载内容。换成一个返回 204 的国内端点即可。
+    const tune = async () => {
+      await sh('settings put global captive_portal_http_url http://connect.rom.miui.com/generate_204');
+      await sh('settings put global captive_portal_https_url https://connect.rom.miui.com/generate_204');
+      await sh('settings put global captive_portal_mode 0');
+    };
+    // 已经连上就别折腾了
+    if (/Wifi is connected/i.test(await sh('cmd wifi status'))) {
+      await tune();
+      return true;
+    }
+    // 开关被关掉时（用户手滑 / 之前 -svc wifi disable）先打开
+    await sh('svc wifi enable');
+    await new Promise((r) => setTimeout(r, 1500));
+
+    // 打开 Wi-Fi 设置页，用 uiautomator 找到 AndroidWifi 那一行再点它。
+    // 比按坐标点稳：不同分辨率 / 语言下坐标都不一样。
+    await sh('am start -a android.settings.WIFI_SETTINGS');
+    await new Promise((r) => setTimeout(r, 2500));
+    await sh('uiautomator dump /sdcard/ui.xml');
+    const xml = await new Promise((resolve) => {
+      try {
+        execFile(adb, ['-s', this.serial, 'shell', 'cat', '/sdcard/ui.xml'],
+          { timeout: 10000, windowsHide: true, env, maxBuffer: 8 * 1024 * 1024 },
+          (e, out) => resolve(e ? '' : String(out || '')));
+      } catch (_) { resolve(''); }
+    });
+    // 节点形如 <node text="AndroidWifi" ... bounds="[x1,y1][x2,y2]" />
+    const re = /<node[^>]*\btext="([^"]*)"[^>]*\bbounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/g;
+    let m = re.exec(xml);
+    while (m) {
+      const label = m[1];
+      if (/AndroidWifi/i.test(label)) {
+        const cx = Math.round((Number(m[2]) + Number(m[4])) / 2);
+        const cy = Math.round((Number(m[3]) + Number(m[5])) / 2);
+        await sh(`input tap ${cx} ${cy}`);
+        await new Promise((r) => setTimeout(r, 6000));
+        if (/Wifi is connected/i.test(await sh('cmd wifi status'))) {
+          await tune();
+          return true;
+        }
+      }
+      m = re.exec(xml);
+    }
+    // 兜底：直接重连一次看看（有些版本 dump 里没有 text，只有 content-desc）
+    await sh('svc wifi disable');
+    await new Promise((r) => setTimeout(r, 1500));
+    await sh('svc wifi enable');
+    await new Promise((r) => setTimeout(r, 6000));
+    const ok = /Wifi is connected/i.test(await sh('cmd wifi status'));
+    if (ok) await tune();
+    return ok;
   }
 
   /**
@@ -864,7 +1016,17 @@ class EmulatorEngine {
    */
   async start({ headless = false, onLog = () => {}, probe = null, maxAttempts = 4 } = {}) {
     if (this.proc && !this.proc.killed) {
-      return { ok: true, reused: true, serial: this.serial, port: this.port };
+      // 关键：emulator.exe 只是启动器，spawn 完 qemu 自己就退出了，而这个 proc
+      // 对象会一直留着（killed 仍是 false）。只看它会把「已经关掉的机器」当成
+      // 还活着 —— 重启换面板后紧接着 ensure() 就踩过这个坑：start() 直接返回
+      // reused，调用方拿着一个已经死掉的 serial 去 adb，报 `device not found`，
+      // 表现就是「切换应用到另一个方向的 App 直接失败」。
+      // 所以必须再确认控制台端口上真的有机器在跑，才算复用。
+      if (await this._consoleAlive()) {
+        return { ok: true, reused: true, serial: this.serial, port: this.port };
+      }
+      onLog('上一次的模拟器已经退出，重新开机…');
+      this.proc = null;
     }
 
     const loc = this.locate();
@@ -1071,11 +1233,20 @@ class EmulatorEngine {
         onLog(`运行时就绪（${Math.round(bootMs / 1000)}s，${plan.label}）`);
         // 开机成功不等于能用：顺手体检网络。虚拟机没网时，需要联网的页面会一直黑屏，
         // 用户只会说「这个应用黑屏」，很难联想到是网络。这里主动查一次并说清楚。
+        //
+        // 但不能「查一次就下结论」：Wi-Fi 关联 + DHCP 普遍比 sys.boot_completed 晚
+        // 5~20 秒，以前这里只调 checkNetwork() 一次，于是**每次冷启动**都会打一条
+        // 「⚠ 没有网络，请重置安卓数据」，而 5 秒后网络就绪了 —— 用户照着做就会
+        // 丢光已装应用。现在给它 12 秒等待窗口（就绪即返回），真超时才提示，
+        // 而且不再建议破坏性操作。
         let network = null;
-        try { network = await this.checkNetwork(); } catch (_) { /* 体检失败不算启动失败 */ }
+        try {
+          network = await this.checkNetwork('', { waitMs: 12000, interval: 3000 });
+        } catch (_) { /* 体检失败不算启动失败 */ }
         if (network && !network.ok) {
-          onLog('⚠ 安卓虚拟机当前没有网络：需要联网的应用（如红果、短剧类）打开后会一直黑屏。'
-            + '可在「设置 → 修复网络」重置安卓数据来修（应用清单会保留，点开时会自动重装）。');
+          onLog('⚠ 安卓虚拟机暂时没连上网（Wi-Fi 未关联或没拿到地址）。'
+            + '需要联网的应用打开后可能一直黑屏：稍后重开应用即可；'
+            + '若持续无网，可在「设置 → 修复网络」重连（不会删除已装应用）。');
         }
         return {
           ok: true, serial: this.serial, port, accel: accelInfo, logFile,
@@ -1198,6 +1369,9 @@ class EmulatorEngine {
       await sleep(300);
     }
     await this.killAttempt();
+    // 关干净了就把启动器句柄丢掉。留着它会让 running() 永远返回 true、
+    // start() 以为还能复用（见 start() 里的注释）。
+    this.proc = null;
     return true;
   }
 

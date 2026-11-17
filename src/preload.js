@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('apkstart', {
   parseApk: (p) => invoke('apk:parse', p),
   installApk: (p) => invoke('apk:install', p),
   launch: (pkg) => invoke('app:launch', pkg),
+  stop: (pkg) => invoke('app:stop', pkg),
   uninstall: (pkg) => invoke('app:uninstall', pkg),
   createShortcut: (pkg) => invoke('app:shortcut', pkg),
   clearData: (pkg) => invoke('app:clearData', pkg),
@@ -63,6 +64,8 @@ contextBridge.exposeInMainWorld('apkstart', {
   installAehd: () => invoke('provision:installAehd'),
   enableAccel: () => invoke('provision:enableAccel'),
   enableVirtualization: () => invoke('provision:enableVirtualization'),
+  // 打开「启用或关闭 Windows 功能」对话框（商店版只能引导用户自己去勾选）
+  openWindowsFeatures: () => invoke('provision:openWindowsFeatures'),
   downloadIso: () => invoke('provision:downloadIso'),
   createDisk: (gb) => invoke('provision:createDisk', gb),
   importIso: () => invoke('provision:importIso'),
@@ -103,6 +106,7 @@ contextBridge.exposeInMainWorld('apkstart', {
     rotate: () => invoke('shell:rotate'),
     back: () => invoke('shell:back'),
     forward: () => invoke('shell:forward'),
+    keyEvent: (key) => invoke('shell:keyEvent', key),
     onState: (cb) => {
       const handler = (_e, payload) => cb(payload);
       ipcRenderer.on('shell:state', handler);
@@ -118,6 +122,16 @@ contextBridge.exposeInMainWorld('apkstart', {
     tune: (pkg) => invoke('android:tune', pkg),
     permissions: (pkg) => invoke('android:permissions', pkg),
     grantAll: (pkg) => invoke('android:grantAll', pkg),
+  },
+
+  // 按键映射（游戏键盘→触屏）
+  keymap: {
+    getPresets: () => invoke('keymap:getPresets'),
+    getMap: (pkg) => invoke('keymap:getMap', pkg),
+    setMap: (pkg, mappings) => invoke('keymap:setMap', pkg, mappings),
+    setEnabled: (on) => invoke('keymap:setEnabled', on),
+    isEnabled: () => invoke('keymap:isEnabled'),
+    applyPreset: (pkg, presetId) => invoke('keymap:applyPreset', pkg, presetId),
   },
 
   pathForFile: (file) => webUtils.getPathForFile(file),

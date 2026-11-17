@@ -140,6 +140,9 @@ function renderGrid() {
     return;
   }
 
+  // 末尾放一块「添加应用」虚线卡片。
+  // 目的不只是好看：应用少的时候下面是一大片空白，用户不知道该干什么；
+  // 这块卡片把「还能拖 APK 进来」这件事直接摆在眼前，也顺手填掉了空白。
   grid.innerHTML = apps.map((a) => `
     <div class="card" data-pkg="${esc(a.package)}" title="${esc(a.label)} · ${esc(a.package)}">
       ${a.pinned ? '<span class="pin">★</span>' : ''}
@@ -153,7 +156,16 @@ function renderGrid() {
       <div class="meta">${a.running ? '运行中' : `v${esc(a.versionName)}${a.lastLaunchAt ? ' · ' + relTime(a.lastLaunchAt) : ''}`}</div>
       <div class="open-hint">${a.running ? '切换到前台' : '打开'}</div>
     </div>
-  `).join('');
+  `).join('') + `
+    <div class="card card-add" id="cardAdd" role="button" tabindex="0" title="拖入 APK 文件，或点击选择">
+      <div class="add-plus" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round"><path d="M12 6v12"/><path d="M6 12h12"/></svg>
+      </div>
+      <div class="name">添加应用</div>
+      <div class="meta">拖入 APK 即可安装</div>
+    </div>
+  `;
 }
 
 /* ---------------- 数据刷新 ---------------- */
@@ -198,7 +210,8 @@ async function refreshStatus() {
       tag.className = 'brand-tag';
     } else if (s.needsSetup === 'accel') {
       dot.className = 'dot warn';
-      text.textContent = '未检测到硬件加速：已自动回退软件模拟（首次开机较慢）';
+      // 说清「怎么修」而不是只说「没开」——这句是状态条上最容易被看到的位置
+      text.textContent = '未启用硬件加速：已回退软件模拟（很慢）。点右下角「环境自检 → 修复」开启';
       tag.textContent = '软件模拟';
       tag.className = 'brand-tag';
     } else if (s.needsSetup === 'sysimg') {
@@ -230,6 +243,22 @@ async function refreshStatus() {
       tag.className = 'brand-tag';
     }
     $('statusDevice').textContent = s.deviceOnline ? (s.serial || '') : '';
+    // 网络状态：这是用户最容易踩的坑（应用里一直「网络错误」，但看不出是虚拟机没网）。
+    // 直接摆在状态栏，出问题时一眼能看到，不用去翻日志。
+    const netEl = $('statusNet');
+    const netSep = $('statusNetSep');
+    if (netEl) {
+      const show = !!s.deviceOnline && !!s.network;
+      netEl.hidden = !show;
+      if (netSep) netSep.hidden = !show;
+      if (show) {
+        netEl.textContent = s.network.ok ? `网络正常 ${s.network.ip || ''}`.trim() : '虚拟机未联网';
+        netEl.className = 'status-item status-net ' + (s.network.ok ? 'ok' : 'warn');
+        netEl.title = s.network.ok
+          ? '安卓虚拟机已联网，联网类应用可以正常加载'
+          : '安卓虚拟机没有网络，联网页面会一直是空白/报错。可在「设置 → 修复网络」处理';
+      }
+    }
 
     renderSetup(s);
   } catch (e) {
@@ -576,8 +605,13 @@ async function uninstall(pkg) {
 
 const MENU_ITEMS = [
   { key: 'open', label: '打开应用', kbd: 'Enter' },
+  // 只在应用真的在运行时才出现（见 showMenu 里的过滤）。
+  // 以前完全没有这一项，独立窗口模式下又没有可点的关闭按钮，
+  // 应用一起来就关不掉，只能退到托盘退出整个 ApkStart。
+  { key: 'stop', label: '关闭应用', onlyRunning: true },
   { key: 'shortcut', label: '创建桌面快捷方式' },
   { key: 'pin', label: '固定到顶部' },
+  { key: 'keymap', label: '按键映射…' },
   { divider: true },
   { key: 'reveal', label: '打开 APK 所在位置' },
   { key: 'clear', label: '清除应用数据' },
@@ -589,10 +623,11 @@ function showMenu(x, y, pkg) {
   const menu = $('ctxmenu');
   state.menuPkg = pkg;
   const app = state.apps.find((a) => a.package === pkg);
-  menu.innerHTML = MENU_ITEMS.map((it) => {
+  const items = MENU_ITEMS.filter((it) => !it.onlyRunning || (app && app.running));
+  menu.innerHTML = items.map((it) => {
     if (it.divider) return '<div class="divider"></div>';
     const label = it.key === 'pin' ? (app && app.pinned ? '取消固定' : '固定到顶部') : it.label;
-    return `<div class="item ${it.danger ? 'danger' : ''}" data-act="${it.key}">
+    return `<div class="item ${it.danger ? 'danger' : ''}" data-key="${it.key}" data-act="${it.key}">
       <span>${esc(label)}</span>${it.kbd ? `<span class="k">${it.kbd}</span>` : ''}
     </div>`;
   }).join('');
@@ -615,8 +650,22 @@ async function handleMenu(act) {
   if (!app) return;
   switch (act) {
     case 'open': return launchApp(pkg);
+    case 'stop': {
+      try {
+        const r = await api.stop(pkg);
+        if (r && r.ok) {
+          toast({ title: '已关闭', body: app.label, type: 'ok' });
+        } else {
+          toast({ title: '关闭失败', body: (r && r.error) || '未知错误', type: 'error' });
+        }
+      } catch (e) {
+        toast({ title: '关闭失败', body: e.message, type: 'error' });
+      }
+      return refreshApps();
+    }
     case 'shortcut': return createShortcut(pkg);
     case 'pin': return api.pin(pkg, !app.pinned).then(refreshApps);
+    case 'keymap': return showKeymapPicker(pkg, app.label);
     case 'reveal': return api.revealApk(pkg);
     case 'clear': {
       if (!window.confirm(`清除「${app.label}」的全部数据？此操作不可撤销。`)) return;
@@ -630,6 +679,39 @@ async function handleMenu(act) {
     }
     case 'uninstall': return uninstall(pkg);
     default: return undefined;
+  }
+}
+
+/**
+ * 按键映射预设选择器。用 confirm + prompt 做最简交互（不引入新 UI 组件）。
+ * 后续可以做成更精致的弹窗编辑器。
+ */
+async function showKeymapPicker(pkg, label) {
+  try {
+    const presets = await api.keymap.getPresets();
+    const current = await api.keymap.getMap(pkg);
+    const hasCurrent = current && current.length > 0;
+    const lines = presets.map((p, i) => `${i + 1}. ${p.label} — ${p.desc}`);
+    if (hasCurrent) lines.unshift('0. 清除当前映射');
+    const msg = `为「${label}」选择按键映射预设：\n\n${lines.join('\n')}\n\n输入编号：`;
+    const input = window.prompt(msg, hasCurrent ? '0' : '1');
+    if (input === null) return; // 取消
+    const idx = parseInt(input, 10);
+    if (hasCurrent && idx === 0) {
+      await api.keymap.setMap(pkg, []);
+      toast({ title: '已清除按键映射', body: label, type: 'ok' });
+      return;
+    }
+    const presetIdx = hasCurrent ? idx - 1 : idx;
+    if (presetIdx < 1 || presetIdx > presets.length) {
+      toast({ title: '无效编号', type: 'error' });
+      return;
+    }
+    const chosen = presets[presetIdx - 1];
+    await api.keymap.applyPreset(pkg, chosen.id);
+    toast({ title: `已套用「${chosen.label}」`, body: `${label} · 打开应用后键盘即可操控`, type: 'ok' });
+  } catch (e) {
+    toast({ title: '按键映射设置失败', body: e.message, type: 'error' });
   }
 }
 
@@ -700,8 +782,27 @@ function bindAndroid() {
   $('btnAndroidApps').addEventListener('click', () => open('apps'));
 }
 
+/** 按当前底座的 id 决定哪些字段要露出来（自带 = 镜像/内存那些，第三方 = 它自己的路径） */
+function syncBackendFields() {
+  const mode = $('setEngineMode') ? $('setEngineMode').value : 'builtin';
+  const builtin = mode === 'builtin' || mode === 'attach';
+  const show = (id, on) => { const el = $(id); if (el && el.closest('.field')) el.closest('.field').hidden = !on; };
+  show('setMumuPath', mode === 'mumu');
+  show('setFydeosHost', mode === 'fydeos');
+  show('setSystemImage', builtin);
+  show('setMemory', builtin);
+  show('setCores', builtin);
+  show('setCompat', builtin);
+  show('compatInstallField', builtin && !$('compatInstallField').hidden);
+  show('setIdle', true);
+  show('setDevice', mode === 'attach');
+}
+
 function fillSettings(s) {
   $('setEngineMode').value = s.engine.mode;
+  if ($('setMumuPath')) $('setMumuPath').value = s.engine.mumuPath || '';
+  if ($('setFydeosHost')) $('setFydeosHost').value = s.engine.fydeosHost || '';
+  syncBackendFields();
   $('setAdbPath').value = s.adbPath || '';
   $('setDevice').value = s.device || '';
   $('setSystemImage').value = s.runtime.isoPath || '';
@@ -723,6 +824,7 @@ function fillSettings(s) {
   $('setMouseWheelMode').value = ['smooth', 'native', 'off'].includes(s.engine.mouseWheelMode)
     ? s.engine.mouseWheelMode : 'smooth';
   $('setMouseSideButtons').checked = !!s.engine.mouseSideButtons;
+  if ($('setKeymapEnabled')) $('setKeymapEnabled').checked = s.engine.keymapEnabled !== false;
   $('setCompat').checked = !!(s.runtime && s.runtime.compatImage);
   $('setAutoShortcut').checked = !!s.createShortcutOnInstall;
   $('setStartMenuShortcut').checked = s.createStartMenuShortcut !== false;
@@ -736,9 +838,16 @@ function fillSettings(s) {
   if ($('setRenderSize')) $('setRenderSize').value = eng.renderSize || 'auto';
   if ($('setDataGB')) $('setDataGB').value = String(Number(eng.dataPartitionGB || 0));
   if ($('setFastDns')) $('setFastDns').checked = eng.fastDns !== false;
+  if ($('setLocale')) $('setLocale').value = eng.locale || 'zh-CN';
+  if ($('setChineseIme')) $('setChineseIme').checked = eng.chineseIme !== false;
   if ($('setKeepSnapshot')) $('setKeepSnapshot').checked = eng.keepSnapshot !== false;
   $('setDisplayMode').value = d.mode === 'fullscreen' ? 'fullscreen' : 'window';
+  if ($('setAutoFullscreen')) $('setAutoFullscreen').value = d.autoFullscreenOnLaunch === true ? 'on' : 'off';
+  if ($('setLandscape')) $('setLandscape').value = d.landscape === true ? 'landscape' : 'portrait';
+  if ($('setOrientationMode')) $('setOrientationMode').value = d.orientationMode || 'auto';
+  if ($('setTabletMode')) $('setTabletMode').value = d.tabletMode === false ? 'off' : 'on';
   $('setPortrait').value = d.portrait || '900x1600';
+  if ($('setWindowEmbed')) $('setWindowEmbed').value = d.windowEmbed === false ? 'detached' : 'embed';
   $('portraitField').hidden = $('setDisplayMode').value === 'fullscreen';
 }
 
@@ -927,7 +1036,17 @@ function bindSettings() {
     state.settings = await api.setSettings(patch);
   };
 
-  $('setEngineMode').addEventListener('change', (e) => save({ engine: { mode: e.target.value } }));
+  $('setEngineMode').addEventListener('change', async (e) => {
+    await save({ engine: { mode: e.target.value } });
+    syncBackendFields();
+    refreshStatus();
+  });
+  if ($('setMumuPath')) {
+    $('setMumuPath').addEventListener('change', (e) => save({ engine: { mumuPath: e.target.value.trim() } }));
+  }
+  if ($('setFydeosHost')) {
+    $('setFydeosHost').addEventListener('change', (e) => save({ engine: { fydeosHost: e.target.value.trim() } }));
+  }
   $('setAdbPath').addEventListener('change', (e) => save({ adbPath: e.target.value.trim() }));
   $('setDevice').addEventListener('change', async (e) => {
     await save({ device: e.target.value.trim() });
@@ -958,6 +1077,22 @@ function bindSettings() {
   }
   if ($('setFastDns')) {
     $('setFastDns').addEventListener('change', (e) => save({ engine: { fastDns: e.target.checked } }));
+  }
+  if ($('setLocale')) {
+    $('setLocale').addEventListener('change', async (e) => {
+      state.settings = await api.setSettings({ engine: { locale: e.target.value } });
+      toast({ title: '系统语言已更新', body: '下次重启安卓运行时后生效', type: 'ok' });
+    });
+  }
+  if ($('setChineseIme')) {
+    $('setChineseIme').addEventListener('change', async (e) => {
+      state.settings = await api.setSettings({ engine: { chineseIme: e.target.checked } });
+      toast({
+        title: e.target.checked ? '已开启中文输入法' : '已关闭中文输入法',
+        body: '下次重启安卓运行时后生效',
+        type: 'ok',
+      });
+    });
   }
   if ($('setKeepSnapshot')) {
     $('setKeepSnapshot').addEventListener('change', (e) => save({ engine: { keepSnapshot: e.target.checked } }));
@@ -1025,6 +1160,12 @@ function bindSettings() {
   $('setMouseRightBack').addEventListener('change', (e) => savePointer({ mouseRightBack: e.target.checked }));
   $('setMouseWheelMode').addEventListener('change', (e) => savePointer({ mouseWheelMode: e.target.value }));
   $('setMouseSideButtons').addEventListener('change', (e) => savePointer({ mouseSideButtons: e.target.checked }));
+  if ($('setKeymapEnabled')) {
+    $('setKeymapEnabled').addEventListener('change', async (e) => {
+      await api.keymap.setEnabled(e.target.checked);
+      toast({ title: e.target.checked ? '键盘映射已开启' : '键盘映射已关闭', type: 'ok' });
+    });
+  }
   $('setDeepTrim').addEventListener('change', async (e) => {
     await save({ engine: { deepTrim: e.target.checked } });
     // 关掉深度裁剪必须把之前 pm disable-user 的包恢复回来，否则影响是持久的
@@ -1053,9 +1194,60 @@ function bindSettings() {
     state.settings = await api.setSettings({ display: { mode } });
     toast({ title: mode === 'fullscreen' ? '已切全屏' : '已切竖屏窗口', type: 'ok' });
   });
+  if ($('setAutoFullscreen')) {
+    $('setAutoFullscreen').addEventListener('change', async (e) => {
+      const on = e.target.value === 'on';
+      state.settings = await api.setSettings({ display: { autoFullscreenOnLaunch: on } });
+      toast({ title: on ? '已开启自动全屏' : '已关闭自动全屏', body: '下次打开应用时生效', type: 'ok' });
+    });
+  }
+  if ($('setOrientationMode')) {
+    $('setOrientationMode').addEventListener('change', async (e) => {
+      const mode = e.target.value;
+      state.settings = await api.setSettings({ display: { orientationMode: mode } });
+      toast({
+        title: mode === 'auto' ? '已设为跟随应用' : (mode === 'landscape' ? '已强制横屏' : '已强制竖屏'),
+        body: mode === 'auto'
+          ? '下次打开应用时会按应用自己的方向选面板，方向不一致的话会重启一次运行时。'
+          : '下次打开应用时会重启一次运行时把面板切到指定方向，之后不再重启。',
+        type: 'ok',
+      });
+    });
+  }
+  if ($('setTabletMode')) {
+    $('setTabletMode').addEventListener('change', async (e) => {
+      const on = e.target.value === 'on';
+      state.settings = await api.setSettings({ display: { tabletMode: on } });
+      toast({
+        title: on ? '已打开平板排版' : '已关闭平板排版',
+        body: '下次打开应用时生效（会重启一次运行时来改逻辑密度）。',
+        type: 'ok',
+      });
+    });
+  }
+  if ($('setLandscape')) {
+    $('setLandscape').addEventListener('change', async (e) => {
+      const landscape = e.target.value === 'landscape';
+      state.settings = await api.setSettings({ display: { landscape } });
+      toast({
+        title: landscape ? '面板已设为横屏' : '面板已设为竖屏',
+        body: '下次打开应用时会重启一次运行时来切换物理面板方向（约十几秒），之后就不会再重启。',
+        type: 'ok',
+      });
+    });
+  }
   $('setPortrait').addEventListener('change', async (e) => {
     state.settings = await api.setSettings({ display: { portrait: e.target.value } });
     toast({ title: '画面大小已更新', body: '下次打开应用或切换应用时生效', type: 'ok' });
+  });
+  $('setWindowEmbed').addEventListener('change', async (e) => {
+    const embed = e.target.value === 'embed';
+    state.settings = await api.setSettings({ display: { windowEmbed: embed } });
+    toast({
+      title: embed ? '已切回嵌入模式' : '已切到独立窗口模式',
+      body: '下次打开应用时生效。独立模式下安卓画面由模拟器自己开窗口，方向与缩放都由它处理。',
+      type: 'ok',
+    });
   });
   $('btnRebuildShortcuts').addEventListener('click', async () => {
     const r = await api.rebuildShortcuts();
@@ -1531,7 +1723,11 @@ function bindEvents() {
 
   $('grid').addEventListener('click', (e) => {
     const card = e.target.closest('.card');
-    if (card) launchApp(card.dataset.pkg);
+    if (!card) return;
+    // 「添加应用」卡片没有 data-pkg，走安装流程而不是启动。
+    // 直接转调工具栏那个「安装 APK」按钮，复用它的文件选择逻辑。
+    if (card.classList.contains('card-add')) { $('btnInstall').click(); return; }
+    if (card.dataset.pkg) launchApp(card.dataset.pkg);
   });
 
   $('grid').addEventListener('contextmenu', (e) => {
@@ -1604,6 +1800,8 @@ function bindEvents() {
   });
   api.on('toast', (p) => toast({ title: p.message, type: p.type === 'error' ? 'error' : 'info' }));
   api.on('app:launched', () => setTimeout(refreshApps, 800));
+  // 应用被关掉（托盘「关闭当前应用」、右键菜单、或窗口被关）后要刷新「运行中」标记
+  api.on('apps:changed', () => setTimeout(refreshApps, 300));
   api.on('runtime:log', (m) => console.log('[runtime]', m));
   api.on('ui:navigate', (v) => {
     if (v === 'settings') openSettings();
@@ -1821,8 +2019,23 @@ async function fixIssue(issue) {
       if (r.ok) {
         t.update({ title: '硬件加速已启用', body: r.restartNeeded ? '请重启电脑以获得最佳性能' : (r.note || ''), type: 'ok' });
         setTimeout(t.dismiss, 3200);
+      } else if (r.manual) {
+        // 商店（MSIX）版：包固定 mediumIL，通常拿不到管理员授权。
+        // 与其让用户点一个注定失败的按钮，不如直接把「启用或关闭 Windows 功能」
+        // 对话框弹出来，并告诉他勾哪一项。
+        t.dismiss();
+        await api.openWindowsFeatures?.().catch(() => null);
+        toast({
+          title: '需要手动开启一次（仅此一次）',
+          body: r.note || '在打开的窗口里勾选「Windows 虚拟机监控程序平台」，确定后重启电脑。',
+          type: 'info',
+          sticky: true,
+        });
+      } else if (r.cancelled) {
+        t.update({ title: '已取消', body: r.error || '没有拿到管理员授权，硬件加速没有改动。', type: 'info', spinner: false });
+        setTimeout(t.dismiss, 4200);
       } else {
-        t.update({ title: '未能开启', body: r.error || '请重试', type: 'error', sticky: true });
+        t.update({ title: '未能开启', body: r.error || r.note || '请重试', type: 'error', sticky: true });
       }
       break;
     }

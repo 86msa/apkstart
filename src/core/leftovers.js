@@ -58,12 +58,14 @@ function candidateRoots(installDir) {
   if (local) add(path.join(local, 'Programs'));
   add(process.env.ProgramFiles);
   add(process.env['ProgramFiles(x86)']);
+  // 用户主目录下几个高频位置
   const home = os.homedir();
   if (home) {
     add(path.join(home, 'Downloads'));
     add(path.join(home, 'Desktop'));
     add(path.join(home, 'Documents'));
   }
+  // 每个本地磁盘根目录（便携版常直接放盘根）
   try {
     for (const drv of ['C:\\', 'D:\\', 'E:\\', 'F:\\', 'G:\\', 'H:\\']) {
       if (fs.existsSync(drv)) add(drv.replace(/\\+$/, ''));
