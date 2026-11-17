@@ -11,6 +11,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { assertStandalone } = require('./guard-standalone');
 
 const ROOT = path.join(__dirname, '..');
 const PKG = require(path.join(ROOT, 'package.json'));
@@ -118,6 +119,10 @@ if (FULL) {
   console.log('内置运行时（约 1 GB，需要一会儿）…');
   fs.cpSync(runtime, path.join(OUT, 'resources', 'runtime'), { recursive: true });
 }
+
+// 3.6 独立运行守卫：产物里不许出现 MuMu / 雷电 / 蓝叠等第三方模拟器。
+// 命中就让构建失败 —— 这类问题只会在「别人的电脑」上暴露，本地永远测不出来。
+assertStandalone(path.join(OUT, 'resources'), { label: '便携版 resources' });
 
 // 4. 改名主程序
 const exePath = path.join(OUT, 'ApkStart.exe');

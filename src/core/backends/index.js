@@ -55,12 +55,15 @@ function describe() {
 
 /**
  * 按设置创建一个底座实例。
- * @param {object} o { appRoot, settings, runtime, store, log }
+ * @param {object} o { appRoot, settings, runtime, store, log, id }
+ *   `id` 用于显式指定底座，优先级高于 settings.engine.mode。
+ *   上层在「设置写着 mumu、但本机没有」时会传 'builtin' 做本次运行的回退，
+ *   此时不能再去读 settings，否则又会把 mumu 建回来。
  * @returns {{ backend: Backend, Cls: Function, id: string }}
  */
-function create({ appRoot, settings, runtime, store, log }) {
+function create({ appRoot, settings, runtime, store, log, id: forced }) {
   const engine = (settings && settings.engine) || {};
-  let id = String(engine.mode || 'builtin');
+  let id = String(forced || engine.mode || 'builtin');
   // 兼容老版本：mode 以前只有 builtin / attach 两种值
   if (id === 'attach') id = 'builtin';
   const Cls = byId(id) || BuiltinBackend;

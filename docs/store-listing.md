@@ -1,4 +1,4 @@
-# Microsoft Store 提交材料（ApkStart 0.5.4）
+# Microsoft Store 提交材料（ApkStart 0.5.5）
 
 > 这份文件是给 Partner Center 表单直接复制用的。包体、图标、清单由脚本产出，
 > 只有「注册账号 → 预留名称 → 上传 → 送审」必须在网页上人工完成。
@@ -12,7 +12,7 @@
 | Product name | `ApkStart` |
 | Category | Developer tools → Utilities & tools（备选：Productivity） |
 | Price | Free |
-| Package | `dist/store/ApkStart_0.5.4.0_x64.msix`（x64，约 850 MB） |
+| Package | `dist/store/ApkStart_0.5.5.0_x64.msix`（x64，约 850 MB） |
 | 支持语言 | 简体中文 / English (United States) |
 | 官网 | https://github.com/RoutineMiku/apkstart |
 | 支持邮箱 | <!-- 填你的邮箱 --> |
@@ -22,7 +22,14 @@
 
 **中文**
 ```
-0.5.4：
+0.5.5：
+· 修复部分电脑上应用画面全黑的问题：自动识别显卡能力并切换渲染档位，画面异常时自动重启重试。
+· 支持安装 50GB 级的大型安卓游戏：安装前按实际需求检查磁盘空间，不再装到一半才失败。
+· 内存、CPU 核心数与数据分区大小现在可以自己分配，上限跟着你的电脑配置走。
+· 数据分区扩容不再「显示成功但实际没扩」：需要重建时会明确告知并二次确认。
+· 安装包独立运行，自带运行时，不需要预先安装任何模拟器。
+
+0.5.4（已包含）：
 · 修复在 125% / 150% 等非 100% 缩放的屏幕上，独立窗口只显示一部分并偏离角落、点击错位的问题。
 · 修复冷启动时被「允许 USB 调试」授权框卡住、误报显卡/虚拟化问题导致开机超时。
 · 修复 PackageManager 报告「已安装」但应用文件已丢失、导致应用打不开的问题。
@@ -49,7 +56,14 @@
 
 **English**
 ```
-0.5.4:
+0.5.5:
+· Fixed black app screens on some PCs: graphics capability is detected and the render path is switched automatically, with a retry when the picture is blank.
+· Supports installing large Android games in the 50 GB range: disk space is checked up front instead of failing halfway through.
+· Memory, CPU cores and the /data partition size can now be allocated by the user, with limits derived from your PC.
+· Growing the data partition no longer reports a fake success: when a rebuild is required, it is stated clearly and confirmed first.
+· The package runs standalone with its own bundled runtime; no emulator needs to be installed beforehand.
+
+0.5.4 (included):
 · Fixed detached windows showing only partially, sitting off-corner, and misaligned clicks on displays scaled above 100% (125%/150%).
 · Fixed cold boot stalling on the "Allow USB debugging" dialog and being misreported as a graphics/virtualization failure.
 · Fixed apps that PackageManager reported as installed but whose files were missing and would not launch.
@@ -279,7 +293,7 @@ Notes:
    ```powershell
    node build/msix.js --identity "<Identity/Name>" --publisher "<Identity/Publisher>"
    ```
-4. **Packages** → 上传 `dist/store/ApkStart_0.5.4.0_x64.msix`，等待校验通过。
+4. **Packages** → 上传 `dist/store/ApkStart_0.5.5.0_x64.msix`，等待校验通过。
 5. **Store listing** → 填第 2–5 节的内容、上传截图、选分类。
 6. **Pricing and availability** → Free，市场选中国 + 全球。
 7. **Submission options** → 粘贴第 6 节的 certification notes。

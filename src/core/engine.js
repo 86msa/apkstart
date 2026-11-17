@@ -76,6 +76,16 @@ class Runtime {
      */
     this._backend = null;
     this._backendId = '';
+    /**
+     * 第三方底座「本机其实没有」时的临时回退标记。
+     *
+     * ApkStart 是可独立分发的（商店包 / 便携版都只带自己的运行时，不含任何模拟器）。
+     * 用户可能在另一台机器上导入过 settings.json，或者把 MuMu 卸了，此时设置里仍写着
+     * mode=mumu；如果照配置硬起，就会启动失败、整个应用打不开——等于把「可选增强」
+     * 做成了「必须装 MuMu」。所以这里记下「哪个底座不可用」，本次运行改用自带运行时，
+     * 并在日志里说清楚原因；用户重选底座（resetBackend）后标记清空，一切照设置走。
+     */
+    this._fallbackFrom = '';
     store.ensureDirs();
     if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
   }
@@ -85,17 +95,37 @@ class Runtime {
    * @returns {import('./backends/base').Backend}
    */
   get backend() {
-    const want = (this.settings.engine && this.settings.engine.mode) === 'attach'
+    const raw = (this.settings.engine && this.settings.engine.mode) === 'attach'
       ? 'builtin'
       : String((this.settings.engine && this.settings.engine.mode) || 'builtin');
+    // 设置里写着第三方底座、但本机确认没有 → 本次运行退回自带运行时（见 _fallbackFrom 注释）
+    const want = (this._fallbackFrom && raw === this._fallbackFrom) ? 'builtin' : raw;
     if (!this._backend || this._backendId !== want) {
       const made = backends.create({
         appRoot: this.appRoot, settings: this.settings, runtime: this, store, log: (l) => this.log(l),
+        // 显式传 id：回退时 settings 里还是 mumu，不传就会把 mumu 又建回来
+        id: want,
       });
       this._backend = made.backend;
       this._backendId = made.id;
     }
     return this._backend;
+  }
+
+  /**
+   * 设置里要的底座本机到底有没有。
+   *
+   * 只对「本来是可选增强」的第三方底座做判断：自带运行时永远在，不需要探测。
+   * 探测失败（目录没有、服务装不上）一律当作「没有」，交给上层决定要不要回退。
+   */
+  async backendAvailable(backend = this.backend) {
+    if (backend.id === 'builtin') return { ok: true, id: 'builtin' };
+    try {
+      const check = await backend.check();
+      return { ok: !!(check && check.ok), id: backend.id, reason: (check && check.reason) || '' };
+    } catch (e) {
+      return { ok: false, id: backend.id, reason: e.message || '探测失败' };
+    }
   }
 
   /** 后端 id（'builtin' / 'mumu' / …），界面和日志用 */
@@ -108,6 +138,8 @@ class Runtime {
     }
     this._backend = null;
     this._backendId = '';
+    // 用户重新选过底座：之前「本机没有 MuMu」的判断作废，下次按设置重新探测。
+    this._fallbackFrom = '';
   }
 
   get settings() { return store.getSettings(); }
@@ -1077,6 +1109,21 @@ class Runtime {
     // 绝不能在这里走 adoptExisting / killOrphanEmulators：那两段会按 qemu 进程
     // 强杀模拟器，用错底座就会把用户自己开着的模拟器一起杀掉。
     if (backend.id !== 'builtin') {
+      // 先确认这个底座本机真的有。ApkStart 的安装包是独立运行的（只带自己的运行时），
+      // 第三方底座属于「装了才用」的增强；设置里残留 mumu 但机器上没有时，
+      // 不能因此把整个应用卡死在启动阶段，退回自带运行时继续跑。
+      const avail = await this.backendAvailable(backend);
+      if (!avail.ok) {
+        this._fallbackFrom = backend.id;
+        onLog(`${backend.label}不可用（${avail.reason || '本机未安装'}），本次改用 ApkStart 自带运行时`);
+        onLog('如需继续使用该底座，请在设置 → 引擎模式里重新选择，或先安装/修复它');
+        const inner = await this._ensureInner({ onLog });
+        return {
+          ...inner,
+          fallbackFrom: backend.id,
+          fallbackReason: avail.reason || '本机未安装',
+        };
+      }
       const r = await backend.ensure({ onLog });
       if (!r || !r.ok) {
         return { ok: false, error: (r && r.error) || `${backend.label}未能启动`, needsSetup: 'backend' };
