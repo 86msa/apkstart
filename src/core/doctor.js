@@ -288,8 +288,11 @@ function overridesFromSettings(engine = {}) {
  * 之前设置页直接调 chooseProfile()（不带版本和加速状态），会在 37.x 机器上
  * 错误地显示已弃用的 swiftshader_indirect / 软件模拟，和实跑参数对不上。
  */
-function autoProfile({ settings = {}, accel, emulatorVersion = '', diskMB = 0, port = 5554, adbPort = 5044 } = {}) {
+function autoProfile({ settings = {}, accel, emulatorVersion = '', diskMB = 0, port = 5554, adbPort = 5044, host = null } = {}) {
   return chooseProfile({
+    // host 可注入：单测/诊断想复现「4 核小机器」时不用真的换机器。
+    // 不传就按本机实际情况算（正常运行时都是这条路径）。
+    host: host || hostInfo(),
     accel, emulatorVersion, diskMB, port, adbPort, settings,
     overrides: overridesFromSettings(settings && settings.engine),
   });

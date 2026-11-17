@@ -132,7 +132,12 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
   });
 
   await test('设置页展示的自动参数与实跑参数一致（37.x 不再显示弃用后端）', () => {
-    const common = { accel: { ok: true }, emulatorVersion: '37.3.8.0', diskMB: 50000, port: 5562, adbPort: 5044 };
+    const common = {
+      accel: { ok: true }, emulatorVersion: '37.3.8.0', diskMB: 50000, port: 5562, adbPort: 5044,
+      // 显式给宿主：内存/核心上限现在跟着宿主走，不加这一项测试结果会随 CI 机器规格漂移
+      // （GitHub runner 只有 4 核，手动填 6 核会被正确收敛成 3 核，断言就会误报）
+      host: { totalMB: 32768, freeMB: 24000, cores: 12, home: 'C:\\x', homeAscii: true, tmp: TMP, platform: 'win32', arch: 'x64', rdp: false },
+    };
     const p = doctor.autoProfile({ ...common, settings: { engine: { autoMemory: true, gpuMode: 'auto', memoryMB: 0, cores: 0 } } });
     const text = doctor.describeProfile(p);
     assert(p.gpu === 'host' || p.gpu === 'swangle', `应为 host 或 swangle（AMD 机器），实际 ${p.gpu}`);
@@ -881,12 +886,12 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
 
     const auto = doctor.autoProfile({
       settings: { engine: { autoMemory: true, liteMode: true } },
-      accel: { ok: true }, emulatorVersion: '37.3.8.0', diskMB: 100000,
+      accel: { ok: true }, emulatorVersion: '37.3.8.0', diskMB: 100000, host,
     });
     assert(auto.lite === true && auto.cores <= 4, JSON.stringify({ lite: auto.lite, cores: auto.cores }));
     const manual = doctor.autoProfile({
       settings: { engine: { autoMemory: false, cores: 6, liteMode: true } },
-      accel: { ok: true }, emulatorVersion: '37.3.8.0', diskMB: 100000,
+      accel: { ok: true }, emulatorVersion: '37.3.8.0', diskMB: 100000, host,
     });
     assert(manual.cores === 6, '用户手动指定的核数必须优先于轻量模式');
     assert(/轻量容器/.test(doctor.describeProfile(auto)), '诊断摘要应标出轻量容器');
