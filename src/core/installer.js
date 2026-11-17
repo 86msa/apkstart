@@ -166,6 +166,32 @@ class Installer {
       meta: { label: meta.label, package: meta.package, versionName: meta.versionName },
     });
 
+    // 50GB 级游戏：先核对模拟器数据盘剩余空间，而不是装到一半才报
+    // INSTALL_INSUFFICIENT_STORAGE（用户看到的是「装了很久然后失败」）。
+    try {
+      const backend = this.runtime && this.runtime.backend;
+      if (backend && typeof backend.checkDiskFor === 'function') {
+        let bytes = 0;
+        if (bundle && bundle.files) {
+          for (const f of bundle.files) {
+            try { bytes += fs.statSync(f).size; } catch (_) { /* 忽略临时文件 */ }
+          }
+        } else {
+          try { bytes = fs.statSync(filePath).size; } catch (_) { /* 用 0 兜底 */ }
+        }
+        const verdict = backend.checkDiskFor(bytes);
+        if (!verdict.ok) {
+          onProgress({ stage: 'error', message: verdict.message });
+          const err = new Error(verdict.message);
+          err.needsSetup = 'disk';
+          throw err;
+        }
+      }
+    } catch (e) {
+      if (e && e.needsSetup === 'disk') throw e;
+      // 容量探测失败不能挡住安装
+    }
+
     try {
       // 零配置：仅含 ARM 库的应用自动补齐带 ARM 翻译层的镜像，用户不用开任何开关
       if (isArmOnly(meta) && !this.runtime.provisioner.playImageInfo().ok) {

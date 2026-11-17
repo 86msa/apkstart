@@ -15,6 +15,8 @@
 const fs = require('fs');
 const path = require('path');
 const { Backend, CAPS } = require('./base');
+const { freeDiskMB } = require('../doctor');
+const { diskRequiredMB, diskVerdict } = require('../mumu-compat');
 
 class BuiltinBackend extends Backend {
   static get id() { return 'builtin'; }
@@ -121,6 +123,27 @@ class BuiltinBackend extends Backend {
   usage() { return this.rt ? this.rt.usage() : { total: 0, items: [] }; }
 
   dataInfo() { return this.rt ? this.rt.emulator.dataInfo() : { ok: false }; }
+
+  /**
+   * 大包预检：除了物理磁盘，还要看 /data 分区本身够不够。
+   * 50GB 级游戏装不下的最常见原因不是下载失败，而是 userdata 镜像还是
+   * 默认的 6/8GB —— 装到 dexopt 阶段才报 INSTALL_INSUFFICIENT_STORAGE。
+   */
+  checkDiskFor(bytes) {
+    const info = this.dataInfo() || {};
+    const need = diskRequiredMB(bytes);
+    const phys = diskVerdict(info.avdDir ? freeDiskMB(info.avdDir) : 0, need);
+    if (!phys.ok) return phys;
+    const capGB = Number(info.configuredGB) || 0;
+    if (capGB && capGB * 1024 < need) {
+      return {
+        ok: false,
+        message: `安卓数据分区不足：当前 ${capGB} GB，这个游戏建议至少 ${Math.ceil(need / 1024)} GB。`
+          + '请在设置 → 引擎里把「数据分区容量」调大后重启安卓（会就地扩容，不丢已装应用）。',
+      };
+    }
+    return { ok: true, requiredMB: need };
+  }
 
   async resizeData(mb) { return this.rt ? this.rt.emulator.resizeDataPartition(mb) : { ok: false }; }
 

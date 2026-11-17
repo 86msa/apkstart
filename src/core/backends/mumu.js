@@ -31,6 +31,12 @@ const fs = require('fs');
 const net = require('net');
 const path = require('path');
 const { Backend, CAPS } = require('./base');
+const { frameStats, isMostlyBlack } = require('../frame');
+const { freeDiskMB } = require('../doctor');
+const {
+  RENDER_PROFILES, parseGraphicsLog, recommendedProfiles, nextProfile,
+  profileSettings, profileById, diskRequiredMB, diskVerdict,
+} = require('../mumu-compat');
 
 /** 常见安装位置（按命中率排序）。用户在设置里填的路径优先。 */
 const CANDIDATE_ROOTS = [
@@ -88,6 +94,97 @@ function spawnSyncSafe(cmd, args) {
   }
 }
 
+/** "0x1a2b" / "12345" → 数字句柄；无效返回 0 */
+function hwndOf(raw) {
+  if (raw === null || raw === undefined) return 0;
+  if (typeof raw === 'number') return Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : 0;
+  const s = String(raw).trim();
+  if (!s) return 0;
+  const n = /^0x/i.test(s) ? Number.parseInt(s.slice(2), 16) : Number(s);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+// MuMu 的 main_wnd 在设备进程重启/换分辨率后会失效；这里用 Win32 枚举
+// MuMu 自己的进程现找顶层窗口。脚本和 agent.ps1 同源，输出 JSON。
+const ENUM_MUMU_WINDOWS_PS = `
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public class MuMuEnum {
+  public delegate bool EnumProc(IntPtr h, IntPtr p);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr p);
+  [DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(IntPtr h, out int pid);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassNameW(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
+}
+'@
+$rows = New-Object System.Collections.ArrayList
+$cb = [MuMuEnum+EnumProc]{
+  param($h, $p)
+  $winPid = 0
+  [void][MuMuEnum]::GetWindowThreadProcessId($h, [ref]$winPid)
+  $proc = Get-Process -Id $winPid -ErrorAction SilentlyContinue
+  if ($proc -and $proc.ProcessName -match '^MuMu(NxDevice|NxMain|NxService|Player)') {
+    $cls = New-Object System.Text.StringBuilder 256
+    [void][MuMuEnum]::GetClassNameW($h, $cls, 256)
+    $r = New-Object MuMuEnum+RECT
+    [void][MuMuEnum]::GetWindowRect($h, [ref]$r)
+    $w = $r.R - $r.L; $ht = $r.B - $r.T
+    if ($w -gt 100 -and $ht -gt 100) {
+      [void]$rows.Add([pscustomobject]@{
+        hwnd = $h.ToInt64(); cls = $cls.ToString(); visible = [MuMuEnum]::IsWindowVisible($h)
+        x = $r.L; y = $r.T; w = $w; h = $ht; area = $w * $ht
+      })
+    }
+  }
+  return $true
+}
+[void][MuMuEnum]::EnumWindows($cb, [IntPtr]::Zero)
+$rows | ConvertTo-Json -Compress
+`;
+
+let _winCache = { at: 0, rows: [] };
+
+/** 当前桌面上属于 MuMu 的顶层窗口（带 geometry()），失败返回 [] */
+function findDeviceWindows() {
+  if (process.platform !== 'win32') return [];
+  if (Date.now() - _winCache.at < 350 && _winCache.rows.length) return _winCache.rows;
+  const out = [];
+  try {
+    const { execFileSync } = require('child_process');
+    const text = String(execFileSync('powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', ENUM_MUMU_WINDOWS_PS],
+      {
+        windowsHide: true, encoding: 'utf8', timeout: 8000,
+        maxBuffer: 2 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
+      }) || '').trim();
+    if (!text) return [];
+    const parsed = JSON.parse(text);
+    const rows = Array.isArray(parsed) ? parsed : [parsed];
+    for (const r of rows) {
+      const hwnd = hwndOf(r && r.hwnd);
+      if (!hwnd) continue;
+      const w = {
+        hwnd,
+        cls: String((r && r.cls) || ''),
+        visible: !!(r && r.visible),
+        x: Number(r && r.x) || 0,
+        y: Number(r && r.y) || 0,
+        w: Number(r && r.w) || 0,
+        h: Number(r && r.h) || 0,
+        area: Number(r && r.area) || 0,
+      };
+      w.geometry = () => ({ x: w.x, y: w.y, w: w.w, h: w.h });
+      out.push(w);
+    }
+  } catch (_) { /* 枚举失败就退回 info 报的句柄 */ }
+  _winCache = { at: Date.now(), rows: out };
+  return out;
+}
+
 class MumuBackend extends Backend {
   static get id() { return 'mumu'; }
 
@@ -107,6 +204,12 @@ class MumuBackend extends Backend {
     this.index = 0;
     this._info = null;
     this._infoAt = 0;
+    /** 当前生效 / 已验证的渲染档位（id 见 mumu-compat.js） */
+    this._renderProfile = '';
+    this._appliedProfile = '';
+    this._hostGpu = null;
+    /** 本轮已经试过、确认会黑屏的档位，避免反复横跳 */
+    this._blackTried = new Set();
   }
 
   get caps() {
@@ -161,6 +264,199 @@ class MumuBackend extends Backend {
         try { resolve(JSON.parse(text)); } catch (_) { resolve(text); }
       });
     });
+  }
+
+  /** MuMuManager setting 的便捷封装（针对当前实例） */
+  async setting(args, { timeout = 12000 } = {}) {
+    return this.manager(['setting', '-v', String(this.index), ...args], { timeout });
+  }
+
+  /** 读取实例全部设置；不是 JSON 就返回 null */
+  async readSettings() {
+    const r = await this.setting(['--all'], { timeout: 12000 });
+    return r && typeof r === 'object' && !Array.isArray(r) ? r : null;
+  }
+
+  /**
+   * 写一组设置。MuMuManager 的写法是成对出现的 `-k key -val value`，
+   * 一次调用写完，避免中间态被 MuMu 保存成半套配置。
+   */
+  async writeSettings(pairs) {
+    const args = [];
+    for (const p of pairs) {
+      if (!p || !p.key || p.value === undefined || p.value === null) continue;
+      args.push('-k', String(p.key), '-val', String(p.value));
+    }
+    if (!args.length) return false;
+    const r = await this.setting(args, { timeout: 12000 });
+    if (r && typeof r === 'object' && !Array.isArray(r)) {
+      if (r.errcode !== undefined) return r.errcode === 0;
+      // 成功时 MuMuManager 会把写进去的键回显出来；一个都没回显就是没写成功
+      return pairs.every((p) => Object.prototype.hasOwnProperty.call(r, p.key));
+    }
+    return false;
+  }
+
+  /**
+   * 从 MuMu 自己的 graphics_log 里读出宿主 GPU 与 GLES 能力落差。
+   * 这是黑屏的直接证据；读不到就当没有，不影响启动。
+   */
+  readHostGpu() {
+    if (this._hostGpu) return this._hostGpu;
+    const empty = { glesMismatch: false, vendor: '', renderer: '' };
+    if (!this.root) return empty;
+    try {
+      const nxRoot = path.join(this.root, 'nx_device');
+      const files = [];
+      // 用户的 MuMu 可能是 12 / 15，日志目录版本跟着变，不能写死
+      for (const ver of fs.readdirSync(nxRoot)) {
+        const dir = path.join(nxRoot, ver, 'device', 'graphics_log');
+        if (!fs.existsSync(dir)) continue;
+        for (const f of fs.readdirSync(dir)) {
+          if (!/^log\..*\.txt$/i.test(f)) continue;
+          const full = path.join(dir, f);
+          files.push({ full, t: fs.statSync(full).mtimeMs });
+        }
+      }
+      files.sort((a, b) => b.t - a.t);
+      // 最近两轮都读，防止只看了一半（日志还在写）
+      for (const { full } of files.slice(0, 2)) {
+        const parsed = parseGraphicsLog(fs.readFileSync(full, 'utf8'));
+        if (parsed.glesMismatch || parsed.vendor) {
+          this._hostGpu = parsed;
+          return parsed;
+        }
+      }
+    } catch (_) { /* 没有日志或读不了，按未知处理 */ }
+    return empty;
+  }
+
+  /** 应用一个渲染档位到 MuMu 实例（重启后生效） */
+  async applyRenderProfile(id, { onLog = () => {} } = {}) {
+    const p = profileById(id);
+    if (!p) return false;
+    const ok = await this.writeSettings(profileSettings(id));
+    if (ok) {
+      this._appliedProfile = id;
+      onLog(`MuMu 渲染档位：${p.label}`);
+    }
+    return ok;
+  }
+
+  /** 把已验证可用的档位记住，下次开机直接用它 */
+  rememberProfile(id) {
+    const p = profileById(id);
+    if (!p) return;
+    this._renderProfile = id;
+    try {
+      const store = this.deps.store;
+      if (store && store.saveSettings) store.saveSettings({ engine: { mumuRenderProfile: id } });
+    } catch (_) { /* 写不进设置也不影响本次运行 */ }
+  }
+
+  /** 连接 adb（MuMu 的网络 adb 端口每次开机可能变） */
+  async connectAdb(info) {
+    const loc = this.locate();
+    this.serial = `${info.adb_host_ip || '127.0.0.1'}:${info.adb_port}`;
+    this.adbPath = loc && loc.adb ? loc.adb : '';
+    if (!this.adbPath) return { ok: false, error: 'MuMu 目录里找不到 adb.exe' };
+    await new Promise((resolve) => {
+      execFile(this.adbPath, ['connect', this.serial], { windowsHide: true, timeout: 10000 }, () => resolve());
+    });
+    return { ok: true, serial: this.serial, adbPath: this.adbPath };
+  }
+
+  /**
+   * 抓一帧 guest framebuffer，判断画面是否真的画出来了。
+   *
+   * 注意：这里走 adb 的 framebuffer，和 Windows 窗口是否可见无关 ——
+   * MuMu 在 ApkStart 里常常是隐藏/嵌入状态，但 guest 那帧该有内容还是有内容。
+   */
+  async probeFrame() {
+    const adb = this.adbPath || (this.locate() || {}).adb;
+    if (!adb || !this.serial) return null;
+    // 屏幕休眠时抓到的是纯黑，先唤醒（KEYCODE_WAKEUP 对已唤醒的屏无害）
+    await new Promise((resolve) => {
+      execFile(adb, ['-s', this.serial, 'shell', 'input', 'keyevent', '224'],
+        { windowsHide: true, timeout: 6000 }, () => resolve());
+    });
+    return new Promise((resolve) => {
+      execFile(adb, ['-s', this.serial, 'exec-out', 'screencap'],
+        { windowsHide: true, encoding: 'buffer', maxBuffer: 64 * 1024 * 1024, timeout: 30000 },
+        (err, stdout) => {
+          if (err || !stdout) { resolve(null); return; }
+          resolve(frameStats(stdout, { step: 64 }));
+        });
+    });
+  }
+
+  /** 等 guest 真正画出画面；返回 true 表示非黑屏 */
+  async waitForRenderable({ timeoutMs = 12000, onLog = () => {} } = {}) {
+    const t0 = Date.now();
+    let last = null;
+    let gotFrame = false;
+    while (Date.now() - t0 < timeoutMs) {
+      // eslint-disable-next-line no-await-in-loop
+      last = await this.probeFrame();
+      if (last) {
+        gotFrame = true;
+        if (!isMostlyBlack(last)) return true;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => setTimeout(r, 700));
+    }
+    // 抓不到帧说明 adb 的 framebuffer 通道不可用，不代表画面是黑的。
+    // 这种情况绝对不能触发换档重启 —— 会把用户正常运行的机器折腾坏。
+    if (!gotFrame) {
+      onLog('MuMu framebuffer 读取失败，跳过画面体检（保持当前渲染档位）');
+      return true;
+    }
+    onLog(`MuMu 画面仍为纯黑（抽样亮度均值 ${last.avg}，亮点 ${last.bright}/${last.samples}）`);
+    return false;
+  }
+
+  /**
+   * 黑屏自愈：逐个换渲染档位并重启，直到有一档能画出画面。
+   * 每档只试一次；全试完仍黑就返回失败，让上层给出可执行的提示。
+   */
+  async recoverBlackScreen({ onLog = () => {} } = {}) {
+    const host = this.readHostGpu();
+    if (host.glesMismatch) {
+      onLog(`检测到宿主 GLES 能力不足（需要 ${host.requested}，支持 ${host.max}），优先使用兼容档位`);
+    }
+    const tried = new Set(this._blackTried);
+    // 本轮 ensure() 已经用这个档位开机并确认黑了，别再原样试一遍
+    if (this._appliedProfile) tried.add(this._appliedProfile);
+    for (let round = 0; round < RENDER_PROFILES.length; round += 1) {
+      let id = this._renderProfile && !tried.has(this._renderProfile)
+        ? this._renderProfile
+        : nextProfile([...tried], host);
+      if (!id) break;
+      tried.add(id);
+      // eslint-disable-next-line no-await-in-loop
+      await this.applyRenderProfile(id, { onLog });
+      onLog(`MuMu 黑屏自愈：第 ${round + 1} 次尝试 ${(profileById(id) || {}).label || id}`);
+      // eslint-disable-next-line no-await-in-loop
+      await this.stop({ graceful: true });
+      // eslint-disable-next-line no-await-in-loop
+      await this.manager(['control', 'launch', '-v', String(this.index)], { timeout: 30000 });
+      this._stoppedByUs = false;
+      // eslint-disable-next-line no-await-in-loop
+      const info = await this.waitReady({ onLog });
+      if (!info) continue;
+      // eslint-disable-next-line no-await-in-loop
+      const conn = await this.connectAdb(info);
+      if (!conn.ok) continue;
+      // eslint-disable-next-line no-await-in-loop
+      if (await this.waitForRenderable({ timeoutMs: 12000, onLog })) {
+        this._blackTried = tried;
+        this.rememberProfile(id);
+        onLog(`MuMu 画面已恢复，记住档位 ${id}`);
+        return { ok: true, profile: id, info };
+      }
+    }
+    this._blackTried = tried;
+    return { ok: false, error: 'MuMu 已启动但画面持续黑屏（所有渲染档位都试过了）' };
   }
 
   /** 读取实例信息（带 1.2s 缓存：调用方经常连读好几项） */
@@ -227,26 +523,47 @@ class MumuBackend extends Backend {
     if (!loc) {
       return { ok: false, error: '没有找到 MuMu 模拟器。请先安装网易 MuMu 模拟器 12，或在设置里指定它的安装目录。' };
     }
+    const settings = (this.deps.store && this.deps.store.getSettings)
+      ? this.deps.store.getSettings() : {};
+    this._renderProfile = String((settings.engine && settings.engine.mumuRenderProfile) || '').trim();
+    const host = this.readHostGpu();
+    const initial = this._renderProfile || recommendedProfiles(host)[0];
     let info = await this.info({ fresh: true });
     const wasRunning = !!(info && info.is_android_started);
     if (!wasRunning) {
+      // 还没开机时把渲染档位先写进去。MuMu 只在开机阶段读这些配置，
+      // 开机后再写要等下次重启才生效。
+      if (initial && this._appliedProfile !== initial) {
+        await this.applyRenderProfile(initial, { onLog });
+      }
       onLog(info && info.is_process_started ? 'MuMu 模拟器正在开机…' : '正在启动 MuMu 模拟器…');
       await this.manager(['control', 'launch', '-v', String(this.index)], { timeout: 30000 });
       this._stoppedByUs = false;
       info = await this.waitReady({ onLog });
       if (!info) return { ok: false, error: 'MuMu 模拟器启动超时（120 秒内没有进入安卓桌面）' };
     }
-    this.serial = `${info.adb_host_ip || '127.0.0.1'}:${info.adb_port}`;
-    this.adbPath = loc.adb;
     // MuMu 的 adb 端口不是 emulator-* 的自动注册设备，要先 connect。
-    // 用「全局 adb」还是「MuMu 自带 adb」都行，这里统一用调用方给的 adb（上层会传自带的），
-    // 拿不到才退回 MuMu 自带的。
-    const adb = this.adbPath;
-    await new Promise((resolve) => {
-      execFile(adb, ['connect', this.serial], { windowsHide: true, timeout: 10000 }, () => resolve());
-    });
+    const conn = await this.connectAdb(info);
+    if (!conn.ok) return { ok: false, error: conn.error };
+
+    // 画面体检：ADB 在线 ≠ 游戏能画出来。宿主 GLES 能力不足时，MuMu 的
+    // 游戏进程照常运行，但 eglCreateContext 失败，用户只看到一片黑。
+    // 只对「本次由我们拉起」的机器做体检：复用用户正在看的机器时，游戏本身
+    // 可能是暗色场景，不能因此把人家的模拟器重启掉。
+    const visible = wasRunning || await this.waitForRenderable({ timeoutMs: 12000, onLog });
+    if (!visible) {
+      const fixed = await this.recoverBlackScreen({ onLog });
+      if (!fixed.ok) {
+        return {
+          ok: false,
+          error: `${fixed.error}。可在 MuMu 设置里把显卡渲染模式切成 DirectX + 中画质后重试。`,
+        };
+      }
+      info = fixed.info;
+    }
     return {
-      ok: true, serial: this.serial, adbPath: adb, reused: wasRunning, engine: 'mumu', info,
+      ok: true, serial: this.serial, adbPath: this.adbPath, reused: wasRunning,
+      engine: 'mumu', info, profile: this._renderProfile || this._appliedProfile || initial,
     };
   }
 
@@ -316,11 +633,36 @@ class MumuBackend extends Backend {
    */
   async windowReady({ isEmbedded } = {}) {
     if (typeof isEmbedded === 'function' && isEmbedded()) return { ok: true, already: true };
-    const info = await this.info({ fresh: true });
-    if (!info || !info.main_wnd) return { ok: false, reason: 'no-window' };
-    if (info.player_state !== 'start_finished') return { ok: false, reason: `muMu:${info.player_state}` };
-    await this.showWindow();
-    return { ok: true, shown: true };
+    let last = 'no-window';
+    let sawStarted = false;
+    // MuMu 的安卓先起来、画面窗口后建（换分辨率/重启设备进程尤其明显）。
+    // 只查一次 info 就 SetParent，窗口句柄可能是旧的那一个。
+    for (let i = 0; i < 8; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const info = await this.info({ fresh: true });
+      if (!info || !info.main_wnd) { last = 'no-window'; } else if (info.player_state !== 'start_finished') {
+        last = `muMu:${info.player_state}`;
+      } else {
+        sawStarted = true;
+        // eslint-disable-next-line no-await-in-loop
+        const live = findDeviceWindows();
+        if (live.length) {
+          // eslint-disable-next-line no-await-in-loop
+          await this.showWindow();
+          return { ok: true, shown: true, windows: live.length };
+        }
+        last = 'window-not-painted';
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await sleep(400);
+    }
+    // 枚举窗口失败（PowerShell 被策略挡住等）时，只要 MuMu 自己报已经
+    // start_finished 就照常放行，不能把用户卡在「等待画面窗口」。
+    if (sawStarted) {
+      await this.showWindow();
+      return { ok: true, shown: true, reason: 'info-only' };
+    }
+    return { ok: false, reason: last };
   }
 
   async stop({ graceful = true } = {}) {
@@ -329,22 +671,46 @@ class MumuBackend extends Backend {
     return { ok: !!(r && (r.errcode === 0 || r === true)) };
   }
 
+  /** 数据盘所在分区的剩余空间（50GB 级游戏安装前必须知道） */
+  freeDataMB() {
+    if (!this.root) this.locate();
+    if (!this.root) return 0;
+    try {
+      const vms = path.join(this.root, 'vms');
+      const names = fs.readdirSync(vms);
+      for (const name of names) {
+        const vdi = path.join(vms, name, 'data.vdi');
+        if (fs.existsSync(vdi)) return freeDiskMB(path.dirname(vdi));
+      }
+    } catch (_) { /* 读不到就按未知处理 */ }
+    return freeDiskMB(this.root);
+  }
+
   usage() {
     const info = this._info;
+    const used = info && info.disk_size_bytes ? info.disk_size_bytes : 0;
     return {
-      total: info && info.disk_size_bytes ? info.disk_size_bytes : 0,
-      items: [{ label: 'MuMu 实例磁盘', bytes: info && info.disk_size_bytes ? info.disk_size_bytes : 0 }],
-      note: 'MuMu 的镜像由模拟器自己管理，apkstart 不下载、不清理，卸载应用请用 MuMu 自带界面。',
+      total: used,
+      items: [{ label: 'MuMu 实例磁盘', bytes: used }],
+      note: `MuMu 的镜像由模拟器自己管理，apkstart 不下载、不清理。`
+        + `当前分区剩余约 ${Math.round(this.freeDataMB() / 1024)} GB。`,
     };
   }
 
   dataInfo() {
     const info = this._info;
+    const freeMB = this.freeDataMB();
     return {
-      ok: !!(info && info.disk_size_bytes),
+      ok: !!(info && info.disk_size_bytes) || freeMB > 0,
       dataMB: info && info.disk_size_bytes ? Math.round(info.disk_size_bytes / (1024 * 1024)) : 0,
-      note: '数据分区由 MuMu 管理，改大小请在 MuMu 设置里操作。',
+      freeMB,
+      note: '数据分区由 MuMu 管理；空间不足时请先清理磁盘或把 MuMu 数据盘挪到更大的分区。',
     };
+  }
+
+  /** 50GB 级游戏安装前的磁盘预检，给 installer 用 */
+  checkDiskFor(bytes) {
+    return diskVerdict(this.freeDataMB(), diskRequiredMB(bytes));
   }
 
   dispose() {
@@ -361,11 +727,17 @@ class MumuBackend extends Backend {
       index: this.index,
       serial: this.serial,
       info: this._info,
+      renderProfile: this._renderProfile || this._appliedProfile || '',
+      hostGpu: this.readHostGpu(),
+      freeDataMB: this.freeDataMB(),
+      blackTried: [...this._blackTried],
     };
   }
 }
 
 /** 探测用的辅助：某个端口是否已经有人监听（上层用来判断「要不要等」） */
 MumuBackend.portAlive = portAlive;
+/** 诊断 / 自测用：当前桌面上的 MuMu 窗口列表 */
+MumuBackend.findDeviceWindows = findDeviceWindows;
 
 module.exports = { MumuBackend, CANDIDATE_ROOTS };
