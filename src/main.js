@@ -303,6 +303,24 @@ function applyAutoStart() {
 function displaySettings() { return store.getSettings().display || {}; }
 
 /**
+ * Windows 任务栏 / 通知的身份。
+ *
+ * 为什么要按应用切换：每个安卓应用的桌面快捷方式都写了自己的 AUMID
+ * （`RoutineMiku.ApkStart.<包名>`，见 installer.createShortcut），而且快捷方式的
+ * 图标是**那个应用自己的图标**。Windows 只有在「运行进程的 AUMID == 快捷方式的
+ * AUMID」时，才会把正在运行的窗口和任务栏固定项合并成同一个按钮、并沿用快捷方式
+ * 的图标。身份对不上就会出现「固定项是应用图标、任务栏上却另起一个 ApkStart 图标」。
+ *
+ * setAppUserModelId 官方建议只调一次；实践中对**之后创建**的窗口有效（VS Code 这类
+ * 一个进程跑多个应用的壳层就是这么做的）。这里只在开窗口之前切，且全程 try/catch ——
+ * 万一某个 Windows 版本忽略它，也只是退化成按 exe 图标显示，不影响功能。
+ */
+const APP_AUMID = 'RoutineMiku.ApkStart';
+function setAumid(id) {
+  try { app.setAppUserModelId(String(id || APP_AUMID).slice(0, 128)); } catch (_) { /* 非 Windows 或旧版本忽略 */ }
+}
+
+/**
  * 这个应用应该用横屏面板还是竖屏面板？
  *
  * 模拟器的物理面板（hw.lcd）是画面的「真实形状」，Android 不会为了
@@ -500,6 +518,8 @@ async function openAppWindow(pkg, tip) {
   //     用户会以为程序崩了。
   const splashVisible = !!(splashWin && !splashWin.isDestroyed());
   const label = (rec && rec.label) || pkg;
+  // 先把这个应用的身份切过去，再开窗口：任务栏才会沿用快捷方式里那个应用的图标
+  setAumid(`${APP_AUMID}.${pkg}`);
   appWin.open({
     pkg,
     label,
@@ -754,6 +774,8 @@ function createWindow({ show = true } = {}) {
 }
 
 function showWindow() {
+  // 回到管理窗口 = 回到 ApkStart 自己的身份（不然任务栏会沿用上一个应用的图标）
+  setAumid(APP_AUMID);
   if (!mainWindow) createWindow();
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
@@ -2284,9 +2306,10 @@ if (!gotLock) {
     // Windows 任务栏身份（AppUserModelID）
     // 不设的话 Windows 只能按 exe 路径猜身份：任务栏固定项、跳转列表、通知来源
     // 都会落到 "Electron" 上 —— 用户看到的就是「图标/名字是默认的那个」。
-    // 这里和快捷方式（installer.createShortcut 里的 RoutineMiku.ApkStart.<pkg>）
-    // 保持同一个前缀，主窗口与「ApkStart」这个应用才归得到一起。
-    try { app.setAppUserModelId('RoutineMiku.ApkStart'); } catch (_) { /* 非 Windows 忽略 */ }
+    // 注意这里是「当前进程」的身份，切到某个安卓应用时会换成那个应用自己的
+    // AUMID（见 openAppWindow），否则任务栏固定项和正在运行的窗口对不上，
+    // 固定项显示的还是 ApkStart 的图标。
+    setAumid(APP_AUMID);
     runtime = new Runtime(APP_ROOT);
     // 启动即留一行痕迹：出问题时用户把 app.log 发过来就能看到版本与数据目录
     appLog(`start v${app.getVersion()} data=${store.DATA_DIR} pid=${process.pid}`);

@@ -2565,8 +2565,7 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(/找不到 rcedit\.exe/.test(packJs), '缺 rcedit 要告警');
 
     // 任务栏身份：不设 AppUserModelID，任务栏固定项/通知会落到 "Electron" 上
-    assert(/app\.setAppUserModelId\('RoutineMiku\.ApkStart'\)/.test(mainJs),
-      '启动时要设置 AppUserModelID');
+    assert(/setAumid\(APP_AUMID\);/.test(mainJs), '启动时要设置 AppUserModelID');
 
     // 完整版（含运行时）作为一个可交付版本
     assert(/--full/.test(packJs) && /ApkStart-v\$\{PKG\.version\}-win64-full/.test(packJs),
@@ -2591,6 +2590,31 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     // 商店包和 exe 用的是同一个版本来源，不该有第二份硬编码版本号
     const msixJs = fs.readFileSync(path.join(root, 'build', 'msix.js'), 'utf8');
     assert(/const VERSION = String\(pkg\.version/.test(msixJs), 'MSIX 版本号必须取自 package.json');
+  });
+
+  await test('安卓应用的快捷方式必须用它自己的图标 + 自己的任务栏身份', () => {
+    const root = path.join(__dirname, '..');
+    const installerJs = fs.readFileSync(path.join(root, 'src', 'core', 'installer.js'), 'utf8');
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    const shortcutJs = fs.readFileSync(path.join(root, 'src', 'core', 'shortcut.js'), 'utf8');
+
+    // 桌面/开始菜单快捷方式的图标 = 从 APK 里解出来的 <包名>.ico，绝不是 ApkStart 的品牌图
+    assert(/const ico = app\.icoPath && fs\.existsSync\(app\.icoPath\) \? app\.icoPath : undefined;/.test(installerJs),
+      '要用应用自己的 icoPath');
+    assert(/iconIcoPath: ico/.test(installerJs), 'writeShortcut 要拿到应用图标');
+    assert(!/iconIcoPath:\s*(APPICON|appicon|brandIcon)/.test(installerJs), '不能用 ApkStart 的品牌图标');
+    // 每个应用一个 AUMID：任务栏按应用分组，固定项才认得出是哪个应用
+    assert(/appUserModelId: `RoutineMiku\.ApkStart\.\$\{app\.package\}`/.test(installerJs),
+      '每个应用要有自己的 AUMID');
+    // Windows 只在「进程 AUMID == 快捷方式 AUMID」时沿用快捷方式图标，
+    // 所以打开某个应用时要把进程身份切过去，回管理窗口再切回 ApkStart。
+    assert(/const APP_AUMID = 'RoutineMiku\.ApkStart';/.test(mainJs), '要有统一的 AUMID 前缀');
+    assert(/setAumid\(`\$\{APP_AUMID\}\.\$\{pkg\}`\)/.test(mainJs), '开应用窗口前要切到该应用的 AUMID');
+    assert(/function showWindow\(\) \{\s*\n\s*\/\/[^\n]*\n\s*setAumid\(APP_AUMID\);/.test(mainJs),
+      '回管理窗口要切回 ApkStart 的 AUMID');
+    // writeShortcut 必须把 iconIndex 设成 0（ico 里第 0 帧），否则某些尺寸会取错
+    assert(/icon: opt\.iconIcoPath \|\| opt\.target/.test(shortcutJs), '图标路径要能回退到 target');
+    assert(/iconIndex: 0/.test(shortcutJs), 'iconIndex 要是 0');
   });
 
   console.log(results.join('\n'));
