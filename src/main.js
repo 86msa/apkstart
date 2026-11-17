@@ -1467,6 +1467,63 @@ function registerIpc() {
   // 兼容旧界面：语义已改为「按设置重新同步」
   ipcMain.handle('settings:unhook', async () => { refreshPointerMapping(); return true; });
 
+  // ---------------- 本机体检 / 自动配置 ----------------
+  // 探测能自动做的（内存、核心、画质、渲染后端）就自动做；
+  // 必须管理员权限的（开 Windows 功能、装 AEHD）给按钮；只能进 BIOS 的说清楚怎么改。
+
+  ipcMain.handle('preflight:run', async () => {
+    const preflight = require('./core/preflight');
+    let accel = { ok: false, kind: 'none' };
+    try { accel = await runtime.provisioner.emulatorAccel(); } catch (_) { /* 运行时还没部署 */ }
+    const hw = await preflight.collect({ accel });
+    const edition = store.STORE_BUILD ? 'store' : 'installer';
+    const report = preflight.evaluate({ hw, settings: store.getSettings(), edition });
+    return { ok: true, hw, report, edition };
+  });
+
+  /**
+   * 应用体检推荐：写设置 + 把这台机器的补丁落成一份驱动。
+   * 只写 preflight 明确列出的几个安全项（内存 / 核心 / 画质 / 渲染后端 / 是否锁软件模拟）。
+   */
+  ipcMain.handle('preflight:apply', async () => {
+    const preflight = require('./core/preflight');
+    const drv = require('./core/drivers');
+    let accel = { ok: false, kind: 'none' };
+    try { accel = await runtime.provisioner.emulatorAccel(); } catch (_) { /* ignore */ }
+    const hw = await preflight.collect({ accel });
+    const edition = store.STORE_BUILD ? 'store' : 'installer';
+    const report = preflight.evaluate({ hw, settings: store.getSettings(), edition });
+    const patch = sanitizeResourcePatch(report.patch);
+    const next = store.saveSettings(patch);
+
+    // 把这台机器的参数固化成驱动：以后每次开机都按它来，不用重复体检。
+    // 校验一遍再落盘 —— 体检生成的内容同样不能绕过白名单。
+    let driverFile = '';
+    let driverError = '';
+    try {
+      const v = drv.validateDriver(report.driver);
+      if (!v.ok) throw new Error(v.errors.join('；'));
+      const dir = drv.userDir(store);
+      fs.mkdirSync(dir, { recursive: true });
+      driverFile = path.join(dir, `${v.driver.id}.json`);
+      fs.writeFileSync(driverFile, `${JSON.stringify(report.driver, null, 2)}\n`, 'utf8');
+      const prev = (next.drivers && next.drivers.state) || {};
+      store.saveSettings({ drivers: { state: { ...prev, [v.driver.id]: true } } });
+    } catch (e) {
+      driverError = e.message;
+    }
+
+    appLog(`体检自动配置：${JSON.stringify(patch.engine)} driver=${driverFile || '(未写入)'}`);
+    return {
+      ok: true,
+      settings: store.getSettings(),
+      driverFile,
+      driverError,
+      summary: report.summary,
+      recommended: report.recommended,
+    };
+  });
+
   // ---------------- 驱动（兼容补丁） ----------------
   // 一个驱动就是一份 JSON：声明「匹配哪些机器」+「命中后改哪些启动参数」。
   // 这里只做「读目录 / 校验 / 匹配 / 导入 / 导出模板 / 开关」，不执行任何代码。

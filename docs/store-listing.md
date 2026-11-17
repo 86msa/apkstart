@@ -1,4 +1,4 @@
-# Microsoft Store 提交材料（ApkStart 0.5.7）
+# Microsoft Store 提交材料（ApkStart 0.5.8）
 
 > 这份文件是给 Partner Center 表单直接复制用的。包体、图标、清单由脚本产出，
 > 只有「注册账号 → 预留名称 → 上传 → 送审」必须在网页上人工完成。
@@ -12,7 +12,7 @@
 | Product name | `ApkStart` |
 | Category | Developer tools → Utilities & tools（备选：Productivity） |
 | Price | Free |
-| Package | `dist/store/ApkStart_0.5.7.0_x64.msix`（x64，约 850 MB） |
+| Package | `dist/store/ApkStart_0.5.8.0_x64.msix`（x64，约 850 MB） |
 | 支持语言 | 简体中文 / English (United States) |
 | 官网 | https://github.com/RoutineMiku/apkstart |
 | 支持邮箱 | <!-- 填你的邮箱 --> |
@@ -22,7 +22,12 @@
 
 **中文**
 ```
-0.5.7：
+0.5.8：
+· 新增「本机体检 · 自动配置」：自动检查 CPU 虚拟化是否开启、Windows 虚拟机监控程序平台是否启用、显卡与显存、内存和系统版本。
+· 能自动改的直接生效：按本机硬件推荐内存、CPU 核心数、画质与渲染后端，并把这台机器的配置固化成一份驱动。
+· 需要管理员权限的操作（开启 Windows 功能、安装加速驱动）提供一键按钮；只能进 BIOS 改的会给出明确步骤。
+
+0.5.7（已包含）：
 · 新增「驱动（兼容补丁）」：机器跑不起来时，可以导入或自己写一份 JSON 补丁，声明匹配哪些机器、命中后改哪些启动参数。
 · 设置页可直接导入驱动、启用停用、打开驱动目录、导出本机模板；补丁只改白名单里的启动参数，不执行任何代码。
 · 内置三个示例驱动（AMD 核显、无硬件加速、老 Intel 核显），默认不启用，按需打开即可。
@@ -66,7 +71,12 @@
 
 **English**
 ```
-0.5.7:
+0.5.8:
+· New "PC check-up · auto-config": detects whether CPU virtualization is enabled, whether the Windows Hypervisor Platform is on, plus GPU/VRAM, memory and OS build.
+· Everything that can be automated is applied: memory, CPU cores, render resolution and render path are tuned for this PC, and the result is saved as a driver for future launches.
+· Actions that need administrator rights (enabling Windows features, installing the acceleration driver) get a one-click button; BIOS-only changes come with exact steps.
+
+0.5.7 (included):
 · New "drivers" (compatibility patches): when a PC cannot boot the runtime, import or write a JSON patch that declares which machines it matches and which launch options to change.
 · Settings can import a driver, toggle it, open the drivers folder, and export a template for this PC. Patches only touch whitelisted launch options and never execute code.
 · Three built-in examples (AMD iGPU, no hardware acceleration, old Intel iGPU) are shipped disabled by default.
@@ -313,7 +323,7 @@ Notes:
    ```powershell
    node build/msix.js --identity "<Identity/Name>" --publisher "<Identity/Publisher>"
    ```
-4. **Packages** → 上传 `dist/store/ApkStart_0.5.7.0_x64.msix`，等待校验通过。
+4. **Packages** → 上传 `dist/store/ApkStart_0.5.8.0_x64.msix`，等待校验通过。
 5. **Store listing** → 填第 2–5 节的内容、上传截图、选分类。
 6. **Pricing and availability** → Free，市场选中国 + 全球。
 7. **Submission options** → 粘贴第 6 节的 certification notes。

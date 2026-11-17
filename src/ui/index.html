@@ -511,6 +511,25 @@
         </details>
       </div>
 
+      <div class="group" id="preflightGroup">
+        <div class="group-title">本机体检 · 自动配置</div>
+        <div class="field">
+          <span class="sub">先查一遍这台机器：CPU 虚拟化有没有开、Windows 的虚拟机监控程序平台在不在、
+            显卡是什么、显存多大、内存和系统版本够不够。能自动改的（内存 / 核心 / 画质 / 渲染后端）直接写进设置，
+            并把结果固化成一份驱动；必须管理员权限的给按钮；只能在 BIOS 里改的会告诉你怎么改。</span>
+        </div>
+        <div class="field">
+          <div class="row">
+            <button class="btn primary sm" id="btnPreflight">开始体检</button>
+            <button class="btn ghost sm" id="btnPreflightApply" hidden>应用推荐配置</button>
+          </div>
+        </div>
+        <div id="preflightList" class="drv-list"></div>
+        <div class="field">
+          <span class="sub" id="preflightSummary"></span>
+        </div>
+      </div>
+
       <div class="group" id="driverGroup">
         <div class="group-title">驱动 · 兼容补丁</div>
         <div class="field">

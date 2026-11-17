@@ -45,6 +45,9 @@ contextBridge.exposeInMainWorld('apkstart', {
   dataInfo: () => invoke('runtime:dataInfo'),
   setDataSize: (gb) => invoke('runtime:setDataSize', gb),
   resources: () => invoke('engine:resources'),
+  // 本机体检 / 自动配置
+  preflightRun: () => invoke('preflight:run'),
+  preflightApply: () => invoke('preflight:apply'),
   // 驱动（兼容补丁）：列清单 / 导入 / 打开目录 / 导出本机模板 / 启用停用
   driversList: () => invoke('drivers:list'),
   driversImport: () => invoke('drivers:import'),
