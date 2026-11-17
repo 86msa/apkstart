@@ -648,18 +648,54 @@ function copyDirContents(src, dest) {
 }
 
 /** 以管理员权限启用一个 Windows 可选功能（如 VirtualMachinePlatform / HypervisorPlatform） */
+/**
+ * 提权开启一个 Windows 可选功能。
+ *
+ * 返回 { ok, cancelled, code, feature }：
+ *   cancelled 用 1223（ERROR_CANCELLED）区分「用户在 UAC 里点了否」和「真的失败」——
+ *   以前两者都是 ok:false，UI 只能笼统说「未能开启」，用户完全不知道自己点了取消。
+ */
 function enableWindowsFeature(feature) {
   return new Promise((resolve) => {
     const inner = `Enable-WindowsOptionalFeature -Online -FeatureName '${feature}' -NoRestart -All`;
-    const ps = `Start-Process -FilePath powershell.exe -Verb RunAs -Wait `
-      + `-ArgumentList @('-NoProfile','-NonInteractive','-Command',${JSON.stringify(inner)})`;
+    const ps = `try { $p = Start-Process -FilePath powershell.exe -Verb RunAs -Wait -PassThru `
+      + `-ArgumentList @('-NoProfile','-NonInteractive','-Command',${JSON.stringify(inner)}); exit $p.ExitCode } `
+      + 'catch { exit 1223 }';
     const { spawn } = require('child_process');
     const proc = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps],
       { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    proc.on('exit', (code) => resolve({ ok: code === 0, restart: true, code }));
-    proc.on('error', () => resolve({ ok: false, error: '无法启动 PowerShell' }));
+    proc.on('exit', (code) => resolve({
+      ok: code === 0, cancelled: code === 1223, restart: true, code, feature,
+    }));
+    proc.on('error', () => resolve({ ok: false, feature, error: '无法启动 PowerShell' }));
   });
 }
+
+/**
+ * 开启系统自带的 WHPX（Windows Hypervisor Platform）。
+ *
+ * 注意：真正让 Android 模拟器用上 WHPX 的功能叫
+ * **「Windows 虚拟机监控程序平台」(HypervisorPlatform)**；
+ * 「虚拟机平台」(VirtualMachinePlatform) 是 WSL2 用的，单独开它 WHPX 仍然不可用。
+ * 两个都开一次，覆盖不同机器上的差异（顺序上先开真正需要的那个）。
+ *
+ * 也不再拿 WinHvPlatform.dll 是否存在当开关：那个 DLL 在现代 Windows 上本来就在
+ * （实测本机 WinHvPlatform.dll 存在，但跑的是 AEHD）——用它判断「能不能开 WHPX」
+ * 只会把真正需要开的机器挡在门外。
+ */
+async function enableWhpxFeatures() {
+  const steps = [];
+  for (const f of ['HypervisorPlatform', 'VirtualMachinePlatform']) {
+    // eslint-disable-next-line no-await-in-loop
+    steps.push(await enableWindowsFeature(f));
+  }
+  return { ok: steps.some((s) => s.ok), cancelled: steps.every((s) => s.cancelled), steps };
+}
+
+/** 商店版专用的手动引导文案：MSIX 包固定 mediumIL，提权通常拿不到 */
+const MSIX_ACCEL_HINT = '商店版无法自行提权。请手动开启一次：'
+  + '按 Win+R → 输入 optionalfeatures → 勾选「Windows 虚拟机监控程序平台」'
+  + '（HypervisorPlatform，WHPX 真正需要的那个），确定后重启电脑。';
 
 // ---------------- 主窗口 ----------------
 
@@ -926,6 +962,8 @@ async function runUpdate() {
  * 收尾再开始，而不是把它的运行时抽走。
  */
 let launchInFlight = null;
+// 「软件模拟」提醒每个进程只弹一次，避免每次切应用都来一条系统通知
+let accelWarned = false;
 
 async function runLaunch(pkg) {
   if (launchInFlight) {
@@ -1101,6 +1139,18 @@ async function launchOne(pkg) {
     }
     send('app:launched', { package: pkg, engine: r.engine });
     appLog(`launch ok ${pkg} ${attachMode}=${embedded}`);
+    // 软件模拟下第一次启动应用时提醒一次：这时候用户已经开始等了，横幅/自检项
+    // 都在设置里，很可能压根没看到。系统通知能盖在应用窗口上面，是最有效的告知点。
+    if (!accelWarned) {
+      runtime.provisioner.emulatorAccel().then((a) => {
+        if (!a || a.ok) return;
+        accelWarned = true;
+        notify('正在以软件模拟运行（很慢）', store.STORE_BUILD
+          ? '开启「Windows 虚拟机监控程序平台」后重启一次，速度可提升 5~10 倍。'
+            + '设置 → 环境自检 → 修复 会直接打开该窗口。'
+          : '设置 → 环境自检 → 修复 可一键开启（需管理员授权），之后重启一次。');
+      }).catch(() => {});
+    }
     // 兜底：如果 early attach 没触发 splashDone（比如嵌入模式），这里补一次
     if (typeof splashDone === 'function') splashDone();
     return { ok: true, embedded };
@@ -1484,10 +1534,31 @@ function registerIpc() {
       }
       accel = await runtime.provisioner.emulatorAccel().catch(() => ({ ok: false }));
       if (!accel.ok) {
-        issues.push({
-          code: 'accel', severity: 'warn', title: '未启用硬件加速',
-          hint: (accel.note || '将回退软件模拟（能跑但很慢）。开启虚拟化后可获得最佳性能。'), fix: 'virtualization',
-        });
+        // 商店版和安装版的补救路径完全不同，提示必须分开写：
+        //   - 商店（MSIX）版不能装内核驱动、也通常拿不到管理员授权 → 只能引导用户
+        //     自己去「启用或关闭 Windows 功能」里勾「Windows 虚拟机监控程序平台」；
+        //   - 安装版/便携版可以一键提权开启（失败还能退 AEHD 驱动）。
+        // 以前两种版本共用一句话，商店用户看到的是「建议安装 AEHD 驱动」——
+        // 而商店版根本装不了驱动，等于指了一条死路。
+        issues.push(store.STORE_BUILD
+          ? {
+            code: 'accel',
+            severity: 'error',
+            title: '需要开启「Windows 虚拟机监控程序平台」',
+            hint: '没有它只能跑纯软件模拟，开机会慢到几分钟。'
+              + MSIX_ACCEL_HINT
+              + '（商店版无法代你提权，需要你手动操作一次，之后重启。）',
+            fix: 'virtualization',
+          }
+          : {
+            code: 'accel',
+            severity: 'warn',
+            title: '未启用硬件加速',
+            hint: `${accel.note || '将回退软件模拟（能跑但很慢）。'}`
+              + '点右侧「修复」会自动开启（需要管理员授权，可能要重启一次）；'
+              + '失败时会自动改装 AEHD 驱动。',
+            fix: 'virtualization',
+          });
       }
       free = doctor.freeDiskMB(runtime.provisioner.paths().root);
       if (free && free < 8192) {
@@ -1776,37 +1847,54 @@ function registerIpc() {
       const accel = await runtime.provisioner.emulatorAccel();
       if (accel.ok) return { ok: true, already: true, accel, note: '硬件加速已可用，无需额外操作' };
 
-      const hv = await runtime.provisioner.hypervisor();
-      if (hv.dll) {
-        // 系统带 WinHvPlatform.dll：开启「虚拟机平台」功能（可能需要重启）
-        const r = await enableWindowsFeature('VirtualMachinePlatform');
-        const r2 = await enableWindowsFeature('HypervisorPlatform').catch(() => ({ ok: false }));
-        const ok = r.ok || r2.ok;
-        const after = await runtime.provisioner.emulatorAccel();
+      // ---------------- 商店（MSIX）版：只能走系统自带的 WHPX ----------------
+      // MSIX 包由 AppX 部署模型拉起，固定 mediumIL，既不能装内核驱动（AEHD），
+      // 通常也拿不到管理员授权。所以这里只尝试 WHPX，拿不到就退回「手动开启」
+      // 的引导 —— 以前的实现直接用 Start-Process -Verb RunAs，商店用户点了
+      // 注定失败，横幅上的「未启用硬件加速」永远消不掉。
+      if (store.STORE_BUILD) {
+        const whpx = await enableWhpxFeatures();
+        runtime.provisioner.invalidateEnvCache?.();
+        if (whpx.ok) {
+          return {
+            ok: true, restartNeeded: true, steps: whpx.steps,
+            accel: await runtime.provisioner.emulatorAccel().catch(() => accel),
+            note: '已请求开启「Windows 虚拟机监控程序平台」，重启电脑后硬件加速才会生效',
+          };
+        }
         return {
-          ok,
-          restartNeeded: r.restart || r2.restart,
-          accel: after,
-          note: ok
-            ? (r.restart ? '已开启「虚拟机平台」，请重启电脑后获得最佳性能' : '「虚拟机平台」已开启，硬件加速即时生效')
-            : (r.error || r2.error || '无法开启系统虚拟化功能'),
+          ok: false,
+          manual: true,
+          settingsUri: 'ms-settings:optionalfeatures',
+          steps: whpx.steps,
+          accel,
+          note: MSIX_ACCEL_HINT,
         };
       }
 
-      // 没有 WHPX 组件：改用 AEHD 驱动（Google 自家，装完即用）
-      // 商店（MSIX）版不能走这条路：MSIX 不允许安装内核驱动，应用也不能以管理员
-      // 身份提权启动（包由 AppX 部署模型拉起，固定 mediumIL）。这里直接给出
-      // 可执行的指引，而不是弹一个注定失败的 UAC。
-      if (store.STORE_BUILD) {
+      // ---------------- 安装版 / 便携版 ----------------
+      // 先试 WHPX（系统自带，无需下载）；失败（用户点了否 / 系统不支持）再退 AEHD 驱动。
+      // AEHD 需要联网拿驱动包，所以放在后面。
+      const whpx = await enableWhpxFeatures();
+      runtime.provisioner.invalidateEnvCache?.();
+      if (whpx.ok) {
         return {
-          ok: false,
-          storeLimited: true,
-          accel,
-          note: '微软商店版无法安装内核驱动。请到「启用或关闭 Windows 功能」里勾选'
-            + '「虚拟机平台（Virtual Machine Platform）」和「Windows 虚拟机监控程序平台」，'
-            + '重启电脑后 ApkStart 会自动使用 WHPX 硬件加速。',
+          ok: true, restartNeeded: true, steps: whpx.steps,
+          accel: await runtime.provisioner.emulatorAccel().catch(() => accel),
+          note: whpx.steps.some((s) => s.cancelled)
+            ? '已开启「Windows 虚拟机监控程序平台」，重启电脑后生效'
+            : '已开启「Windows 虚拟机监控程序平台」，重启电脑后生效',
         };
       }
+      if (whpx.cancelled) {
+        return {
+          ok: false,
+          cancelled: true,
+          error: '你取消了管理员授权，硬件加速没有改动。可以再点一次「修复」，或手动开启「Windows 虚拟机监控程序平台」。',
+        };
+      }
+
+      // WHPX 开不起来：改用 Google 的 AEHD 驱动（装完即用，不用重启）
       const ae = await runtime.provisioner.installAehd(
         (x) => send('provision:progress', { ...x, component: 'aehd' }),
       ).catch((e) => ({ ok: false, error: e.message }));
@@ -1822,6 +1910,7 @@ function registerIpc() {
         ))));
         proc.on('error', (e) => reject(e));
       });
+      runtime.provisioner.invalidateEnvCache?.();
       const after = await runtime.provisioner.emulatorAccel();
       return { ok: after.ok, accel: after, note: after.ok ? 'AEHD 硬件加速已启用' : after.note };
     } catch (e) {
@@ -2000,6 +2089,27 @@ function registerIpc() {
   });
 
   ipcMain.handle('shell:open', (_e, url) => shell.openExternal(url));
+
+  /**
+   * 打开「启用或关闭 Windows 功能」对话框。
+   *
+   * 为什么不用 ms-settings:optionalfeatures：Win11 那个页面是「可选功能」列表，
+   * 里面**没有**「Windows 虚拟机监控程序平台」，用户会白找一圈。经典对话框
+   * optionalfeatures.exe 才有那一项（WHPX 真正需要的功能）。
+   * 打开它本身不需要管理员权限，点「确定」时才 UAC。
+   */
+  ipcMain.handle('provision:openWindowsFeatures', () => {
+    try {
+      const exe = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'optionalfeatures.exe');
+      const { spawn } = require('child_process');
+      spawn(exe, [], { detached: true, stdio: 'ignore' }).unref();
+      return { ok: true };
+    } catch (e) {
+      // 极少见：被组策略挡住 / 文件缺失。退到设置页，至少给用户一个入口
+      shell.openExternal('ms-settings:optionalfeatures').catch(() => {});
+      return { ok: false, error: e.message };
+    }
+  });
 
   ipcMain.handle('window:minimize', () => mainWindow?.minimize());
   ipcMain.handle('window:maximize', () => {

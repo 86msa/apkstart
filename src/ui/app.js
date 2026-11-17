@@ -210,7 +210,8 @@ async function refreshStatus() {
       tag.className = 'brand-tag';
     } else if (s.needsSetup === 'accel') {
       dot.className = 'dot warn';
-      text.textContent = '未检测到硬件加速：已自动回退软件模拟（首次开机较慢）';
+      // 说清「怎么修」而不是只说「没开」——这句是状态条上最容易被看到的位置
+      text.textContent = '未启用硬件加速：已回退软件模拟（很慢）。点右下角「环境自检 → 修复」开启';
       tag.textContent = '软件模拟';
       tag.className = 'brand-tag';
     } else if (s.needsSetup === 'sysimg') {
@@ -2018,8 +2019,23 @@ async function fixIssue(issue) {
       if (r.ok) {
         t.update({ title: '硬件加速已启用', body: r.restartNeeded ? '请重启电脑以获得最佳性能' : (r.note || ''), type: 'ok' });
         setTimeout(t.dismiss, 3200);
+      } else if (r.manual) {
+        // 商店（MSIX）版：包固定 mediumIL，通常拿不到管理员授权。
+        // 与其让用户点一个注定失败的按钮，不如直接把「启用或关闭 Windows 功能」
+        // 对话框弹出来，并告诉他勾哪一项。
+        t.dismiss();
+        await api.openWindowsFeatures?.().catch(() => null);
+        toast({
+          title: '需要手动开启一次（仅此一次）',
+          body: r.note || '在打开的窗口里勾选「Windows 虚拟机监控程序平台」，确定后重启电脑。',
+          type: 'info',
+          sticky: true,
+        });
+      } else if (r.cancelled) {
+        t.update({ title: '已取消', body: r.error || '没有拿到管理员授权，硬件加速没有改动。', type: 'info', spinner: false });
+        setTimeout(t.dismiss, 4200);
       } else {
-        t.update({ title: '未能开启', body: r.error || '请重试', type: 'error', sticky: true });
+        t.update({ title: '未能开启', body: r.error || r.note || '请重试', type: 'error', sticky: true });
       }
       break;
     }

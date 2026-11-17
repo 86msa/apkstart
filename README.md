@@ -243,6 +243,32 @@ Android 版本、freeform 支持、共享目录双向同步，加 `--apk 某应�
 |:---:|
 | ![红果短剧在 ApkStart 兼容模式运行](docs/images/compat-hongguo-playing.png) |
 
+### 提示「未启用硬件加速」怎么办
+
+安卓模拟器在 Windows 上只有两条加速路：
+
+| 方式 | 是什么 | 谁需要管理员 | 装完要重启吗 |
+|---|---|---|---|
+| **WHPX** | Windows 自带功能「Windows 虚拟机监控程序平台」 | 开这个功能时 | 要 |
+| **AEHD** | Google 自家内核驱动 | 装驱动时 | 不用 |
+
+- **安装版 / 便携版**：设置 → 环境自检 → 「未启用硬件加速」右侧点**修复**，会弹一次 UAC，自动开 WHPX；如果开不起来（系统不支持 / 你点了否），会自动改装 AEHD 驱动。
+- **微软商店（MSIX）版**：商店应用**不能自行提权**，所以点「修复」会直接帮你打开「启用或关闭 Windows 功能」对话框，勾选
+  **「Windows 虚拟机监控程序平台」**（英文 HypervisorPlatform），确定后**重启电脑**一次即可。
+
+  也可以自己用管理员 PowerShell 跑：
+
+  ```powershell
+  dism /online /enable-feature /featurename:HypervisorPlatform /all /norestart
+  dism /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart
+  ```
+
+> 注意别只开「虚拟机平台（VirtualMachinePlatform）」——那是 WSL2 要用的，模拟器要的是
+> **「虚拟机监控程序平台（HypervisorPlatform）」**。只开前者，`emulator -accel-check` 依然会说不可用。
+>
+> 没加速也能跑（纯软件模拟），只是开机会慢到几分钟——这也是应用里那条提示的目的，
+> 不是启动失败。
+
 ### 为什么我的 `adb devices` 看不到这台安卓设备
 
 ApkStart 的 adb 服务跑在**专用端口 5044**，和系统里你自己的 adb（5037）完全隔开 —— 这样你的 Android Studio / scrcpy 不会跟它抢设备，它也不会误杀你手动开的模拟器。

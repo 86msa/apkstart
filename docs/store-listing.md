@@ -1,4 +1,4 @@
-# Microsoft Store 提交材料（ApkStart 0.5.1）
+# Microsoft Store 提交材料（ApkStart 0.5.2）
 
 > 这份文件是给 Partner Center 表单直接复制用的。包体、图标、清单由脚本产出，
 > 只有「注册账号 → 预留名称 → 上传 → 送审」必须在网页上人工完成。
@@ -12,7 +12,7 @@
 | Product name | `ApkStart` |
 | Category | Developer tools → Utilities & tools（备选：Productivity） |
 | Price | Free |
-| Package | `dist/store/ApkStart_0.5.1.0_x64.msix`（x64，约 852 MB） |
+| Package | `dist/store/ApkStart_0.5.2.0_x64.msix`（x64，约 852 MB） |
 | 支持语言 | 简体中文 / English (United States) |
 | 官网 | https://github.com/RoutineMiku/apkstart |
 | 支持邮箱 | <!-- 填你的邮箱 --> |
@@ -22,22 +22,36 @@
 
 **中文**
 ```
-0.5.1 修复了以下问题：
+0.5.2：
+· 装好后如果系统没开「Windows 虚拟机监控程序平台」，现在会直接打开该设置对话框并告诉你要勾哪一项
+  （以前点了「修复」会弹一个商店应用注定拿不到的管理员授权框）。
+· 提示文案不再建议安装 AEHD 驱动（商店版不能装内核驱动），改成明确的两步指引。
+· 以软件模拟运行时，第一次打开应用会弹一次系统通知，说明开启硬件加速可快 5~10 倍。
+
+0.5.1（已包含）：
 · 切换到另一个屏幕方向的应用时，等待换向的约 40 秒内会显示「正在切换…」窗口，不再是一片空白桌面。
-· 冷启动时不再误报「虚拟机没有网络」并建议重置安卓数据（实际上几秒后就会自动连上）。
-· 修复了换向重启后偶发「应用启动失败」的问题（旧实例已被关闭却被误判为可复用）。
+· 冷启动时不再误报「虚拟机没有网络」并建议重置安卓数据。
+· 修复了换向重启后偶发「应用启动失败」的问题。
 · 点击另一个应用时，若上一个应用仍在启动，新的启动会排队等待，不再互相打断。
 · 开机瞬间一闪而过的控制台黑框已消除；应用窗口不再短暂显示上一个应用的名字。
 ```
 
 **English**
 ```
-0.5.1 fixes:
-· A "switching orientation…" window is now shown during the ~40s panel change instead of a blank desktop.
+0.5.2:
+· If the optional Windows feature "Windows Hypervisor Platform" is off, the app now
+  opens the Windows Features dialog and tells you exactly which item to tick. Before,
+  pressing "Fix" raised a UAC prompt that a packaged app can never receive.
+· The hint no longer suggests installing the AEHD kernel driver (a Store app cannot).
+· When running in software emulation, the first app launch shows a notification
+  explaining that enabling hardware acceleration makes it 5-10x faster.
+
+0.5.1 (included):
+· A "switching orientation…" window is shown during the ~40s panel change instead of a blank desktop.
 · The startup log no longer falsely reports "no network" and suggests resetting Android data.
-· Fixed an occasional "app failed to start" after an orientation restart (a closed instance was reused).
+· Fixed an occasional "app failed to start" after an orientation restart.
 · Launching another app while one is still starting now queues instead of interrupting it.
-· No more console-window flash during boot, and the app window no longer briefly shows the previous app's name.
+· No more console-window flash during boot; the window no longer shows the previous app's name.
 ```
 
 ---
@@ -207,6 +221,12 @@ Notes:
 · Hardware acceleration uses Windows Hypervisor Platform (WHPX), which is part of
   Windows. No driver or service is installed. If WHPX is not enabled, the app shows
   instructions instead of falling back silently.
+· If the "hardware acceleration not enabled" hint appears on the test machine: this is
+  expected on a Windows install where the optional feature "Windows Hypervisor
+  Platform" (HypervisorPlatform) is turned off. The app cannot enable it by itself
+  because MSIX apps cannot elevate. To enable it: Win+R → `optionalfeatures` → tick
+  "Windows Hypervisor Platform" → OK → reboot. Everything still works without it
+  (software emulation), just much slower. This is a Windows setting, not an app defect.
 · Full-trust desktop app (runFullTrust). Data is stored under %USERPROFILE%\ApkStart,
   outside AppData, to avoid MSIX write virtualization breaking child processes.
 · No telemetry, no ads, no in-app purchases, no account required.
@@ -234,7 +254,7 @@ Notes:
    ```powershell
    node build/msix.js --identity "<Identity/Name>" --publisher "<Identity/Publisher>"
    ```
-4. **Packages** → 上传 `dist/store/ApkStart_0.5.1.0_x64.msix`，等待校验通过。
+4. **Packages** → 上传 `dist/store/ApkStart_0.5.2.0_x64.msix`，等待校验通过。
 5. **Store listing** → 填第 2–5 节的内容、上传截图、选分类。
 6. **Pricing and availability** → Free，市场选中国 + 全球。
 7. **Submission options** → 粘贴第 6 节的 certification notes。

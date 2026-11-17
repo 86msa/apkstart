@@ -2511,6 +2511,42 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(/launchInFlight = entry;/.test(mainJs), '要在 finally 里清空，避免卡死后续启动');
   });
 
+  await test('硬件加速：商店版引导用户开 WHPX，安装版一键开启并可退 AEHD', () => {
+    const root = path.join(__dirname, '..');
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    const appJs = fs.readFileSync(path.join(root, 'src', 'ui', 'app.js'), 'utf8');
+    const preloadJs = fs.readFileSync(path.join(root, 'src', 'preload.js'), 'utf8');
+
+    // 1) 真正让模拟器用上 WHPX 的功能是 HypervisorPlatform（虚拟机平台是 WSL2 的），
+    //    必须排在最前面开；两个都开一次以覆盖不同机器。
+    assert(/for \(const f of \['HypervisorPlatform', 'VirtualMachinePlatform'\]\)/.test(mainJs),
+      '要先开 HypervisorPlatform（WHPX 真正需要的那个）');
+    // 2) 不能再拿 WinHvPlatform.dll 是否存在当开关：现代 Windows 上它一直都在，
+    //    这样判断会把真正需要开功能的机器挡在门外。
+    const handler = mainJs.slice(mainJs.indexOf("ipcMain.handle('provision:enableVirtualization'"));
+    const handlerBody = handler.slice(0, 4000);
+    assert(!/if \(hv\.dll\) \{/.test(handlerBody), '不能再按 WinHvPlatform.dll 分叉');
+    // 3) 商店（MSIX）版：拿不到提权就退回「手动引导」，而不是弹一个注定失败的 UAC
+    assert(/if \(store\.STORE_BUILD\) \{[\s\S]{0,900}manual: true/.test(handlerBody),
+      '商店版失败时要返回 manual 交给 UI 引导');
+    assert(/商店版无法自行提权/.test(mainJs), '商店版文案要说明为什么不能自动开');
+    assert(/虚拟机监控程序平台/.test(mainJs), '要明确写出「Windows 虚拟机监控程序平台」');
+    // 4) 开启成功后必须清掉加速缓存，否则界面还显示旧结论
+    assert(/const whpx = await enableWhpxFeatures\(\);\s*\n\s*runtime\.provisioner\.invalidateEnvCache/.test(mainJs),
+      '开启后要 invalidateEnvCache');
+    // 5) 用户点了「否」要能和真失败区分开（1223 = ERROR_CANCELLED）
+    assert(/1223/.test(mainJs) && /cancelled/.test(mainJs), '要区分 UAC 取消');
+    // 6) 有「Windows 虚拟机监控程序平台」那一项的是经典对话框，不是 ms-settings 页面
+    assert(/optionalfeatures\.exe/.test(mainJs), '要打开 classic optionalfeatures.exe');
+    // 7) UI 要处理 manual / cancelled，并真的去打开那个对话框
+    assert(/r\.manual/.test(appJs) && /api\.openWindowsFeatures/.test(appJs), 'UI 要处理 manual 分支');
+    assert(/openWindowsFeatures: \(\) => invoke\('provision:openWindowsFeatures'\)/.test(preloadJs),
+      'preload 要暴露 openWindowsFeatures');
+    // 8) 软件模拟下第一次启动要弹一次系统通知（设置里的自检项用户很可能没看到）
+    assert(/let accelWarned = false;/.test(mainJs) && /正在以软件模拟运行/.test(mainJs),
+      '软件模拟要提醒一次');
+  });
+
   console.log(results.join('\n'));
   console.log(`\n结果：${passed} 通过，${failed} 失败\n`);
   try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (_) { /* ignore */ }
