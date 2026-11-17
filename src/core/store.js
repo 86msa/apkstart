@@ -6,6 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { safeFilePart } = require('./pkgname');
 
 /**
  * 是不是 Microsoft Store（MSIX / APPX）打包版？
@@ -292,11 +293,14 @@ const store = {
   },
 
   iconPath(pkg) {
-    return path.join(ICON_DIR, `${pkg}.png`);
+    // 第二层防御：pkg 来自外部解析的 APK / apps.json，必须锁在数据目录内。
+    // 即使有旧版本写入的坏记录，也不能让它拼出 ICON_DIR 之外的路径（issue #2 P0-1）。
+    return path.join(ICON_DIR, `${safeFilePart(pkg)}.png`);
   },
 
   apkPath(pkg, version = 'cur') {
-    return path.join(APK_DIR, `${pkg}-${version}.apk`);
+    const v = /^[A-Za-z0-9_-]+$/.test(String(version)) ? version : 'cur';
+    return path.join(APK_DIR, `${safeFilePart(pkg)}-${v}.apk`);
   },
 
   ensureDirs,

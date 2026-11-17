@@ -46,7 +46,7 @@ const { PRESETS: KEYMAP_PRESETS } = require('./core/keymap');
 const { AppWindow, TITLEBAR_H } = require('./core/appwin');
 const { NotifyBridge } = require('./core/notify');
 const { AndroidSettings } = require('./core/android');
-const { Updater } = require('./core/updater');
+const { Updater, findUninstaller } = require('./core/updater');
 const leftovers = require('./core/leftovers');
 
 // Windows 下窗口被遮挡时 capturePage 会拿到旧帧，自动化截图需要禁用遮挡计算
@@ -2091,10 +2091,14 @@ function registerIpc() {
     try {
       try { await assoc.unregisterAssociation(); } catch (_) { /* 取消关联失败不影响卸载 */ }
       const exeDir = path.dirname(process.execPath);
-      const uninstaller = path.join(exeDir, 'uninstaller.exe');
-      if (!fs.existsSync(uninstaller)) {
+      // 和 updater.flavor 用同一套识别规则：electron-builder 生成的是
+      // "Uninstall ApkStart.exe"，旧代码只找 "uninstaller.exe"，
+      // 导致安装版点「一键卸载」被误判成便携版、只弹提示不真卸载（issue #51）。
+      const unName = findUninstaller(exeDir);
+      if (!unName) {
         return { ok: true, portable: true, dataDir: store.DATA_DIR, exeDir };
       }
+      const uninstaller = path.join(exeDir, unName);
       const { spawn } = require('child_process');
       // 卸载前先收掉常驻的模拟器：qemu 会锁住 resources\runtime 里的 exe/dll，
       // NSIS 删不掉就会留下半个安装目录。这里只针对「真的在卸载」，不影响日常退出。
@@ -2626,7 +2630,22 @@ if (!gotLock) {
     // 商店（MSIX）版跳过：安装目录是只读的 WindowsApps，自更新既写不进去也不
     // 合规，更新统一由 Microsoft Store 负责。
     if (app.isPackaged && !store.STORE_BUILD) {
-      setTimeout(() => {
+      // issue #98：先检查「上次已下载解压、但替换/重启没落地的更新」。
+      // 命中就直接用本地载荷重放替换+重启，绝不再下一遍包——这是更新死循环的根治。
+      // 放在查新版本之前，避免 resumable 与新一轮 check 抢进度条。
+      let resuming = false;
+      try {
+        const job = updater.findResumableJob();
+        if (job) {
+          resuming = true;
+          appLog(`resuming pending update ${job.version} from cached payload`);
+          send('update:progress', { stage: 'apply', percent: 100, message: '正在完成上次未完成的更新…' });
+          updater.apply(job);
+          setTimeout(() => { quitting = true; app.quit(); }, 900);
+        }
+      } catch (e) { appLog(`resume check failed: ${e.message}`); }
+      // 命中续做就不再并行发起新一轮查新版本；但不能用 return 跳出整个启动回调。
+      if (!resuming) setTimeout(() => {
         updater.check().then((info) => {
           updateInfo = info;
           send('update:state', info);
