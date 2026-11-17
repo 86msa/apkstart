@@ -13,8 +13,8 @@ try {
     $pkg = Get-Content (Join-Path $root 'package.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     $ver = ('{0}.0' -f $pkg.version)
 } catch {
-    Write-Host '  [!] 读不到 package.json 的 version，退回按 0.5.2.0 找包' -ForegroundColor Yellow
-    $ver = '0.5.2.0'
+    Write-Host '  [!] 读不到 package.json 的 version，退回按 0.5.3.0 找包' -ForegroundColor Yellow
+    $ver = '0.5.3.0'
 }
 $msix = Join-Path $root ('dist\store\ApkStart_{0}_x64.msix' -f $ver)
 $guide = Join-Path $root 'docs\store-upload-walkthrough.md'

@@ -1,4 +1,4 @@
-# Microsoft Store 提交材料（ApkStart 0.5.2）
+# Microsoft Store 提交材料（ApkStart 0.5.3）
 
 > 这份文件是给 Partner Center 表单直接复制用的。包体、图标、清单由脚本产出，
 > 只有「注册账号 → 预留名称 → 上传 → 送审」必须在网页上人工完成。
@@ -12,7 +12,7 @@
 | Product name | `ApkStart` |
 | Category | Developer tools → Utilities & tools（备选：Productivity） |
 | Price | Free |
-| Package | `dist/store/ApkStart_0.5.2.0_x64.msix`（x64，约 850 MB） |
+| Package | `dist/store/ApkStart_0.5.3.0_x64.msix`（x64，约 850 MB） |
 | 支持语言 | 简体中文 / English (United States) |
 | 官网 | https://github.com/RoutineMiku/apkstart |
 | 支持邮箱 | <!-- 填你的邮箱 --> |
@@ -22,10 +22,14 @@
 
 **中文**
 ```
-0.5.2：
-· 装好后如果系统没开「Windows 虚拟机监控程序平台」，现在会直接打开该设置对话框并告诉你要勾哪一项
-  （以前点了「修复」会弹一个商店应用注定拿不到的管理员授权框）。
-· 提示文案不再建议安装 AEHD 驱动（商店版不能装内核驱动），改成明确的两步指引。
+0.5.3：
+· 安卓应用的桌面 / 开始菜单快捷方式恢复使用**该应用自己的图标**，不再显示 ApkStart 的品牌图标。
+· 把应用固定到任务栏时，任务栏按钮与固定项使用同一个应用图标（每个应用独立身份）。
+· 运行器自己的 exe 写入了品牌图标与版本信息，资源管理器里不再显示 Electron 的默认图标和 33.x 版本号。
+
+0.5.2（已包含）：
+· 装好后如果系统没开「Windows 虚拟机监控程序平台」，现在会直接打开该设置对话框并告诉你要勾哪一项。
+· 提示文案不再建议安装 AEHD 驱动（商店版不能装内核驱动）。
 · 以软件模拟运行时，第一次打开应用会弹一次系统通知，说明开启硬件加速可快 5~10 倍。
 
 0.5.1（已包含）：
@@ -38,13 +42,20 @@
 
 **English**
 ```
-0.5.2:
-· If the optional Windows feature "Windows Hypervisor Platform" is off, the app now
-  opens the Windows Features dialog and tells you exactly which item to tick. Before,
-  pressing "Fix" raised a UAC prompt that a packaged app can never receive.
+0.5.3:
+· Desktop and Start menu shortcuts for Android apps now use each app's own icon again,
+  instead of ApkStart's brand icon.
+· Pinning an app to the taskbar keeps the same app icon on both the pinned shortcut and
+  the running window (each app has its own app identity).
+· The runner's own exe now carries the product icon and version info, so Explorer no
+  longer shows Electron's default icon and 33.x version number.
+
+0.5.2 (included):
+· If the optional Windows feature "Windows Hypervisor Platform" is off, the app opens the
+  Windows Features dialog and tells you which item to tick.
 · The hint no longer suggests installing the AEHD kernel driver (a Store app cannot).
-· When running in software emulation, the first app launch shows a notification
-  explaining that enabling hardware acceleration makes it 5-10x faster.
+· In software emulation, the first app launch shows a notification explaining that hardware
+  acceleration makes it 5-10x faster.
 
 0.5.1 (included):
 · A "switching orientation…" window is shown during the ~40s panel change instead of a blank desktop.
@@ -254,7 +265,7 @@ Notes:
    ```powershell
    node build/msix.js --identity "<Identity/Name>" --publisher "<Identity/Publisher>"
    ```
-4. **Packages** → 上传 `dist/store/ApkStart_0.5.2.0_x64.msix`，等待校验通过。
+4. **Packages** → 上传 `dist/store/ApkStart_0.5.3.0_x64.msix`，等待校验通过。
 5. **Store listing** → 填第 2–5 节的内容、上传截图、选分类。
 6. **Pricing and availability** → Free，市场选中国 + 全球。
 7. **Submission options** → 粘贴第 6 节的 certification notes。
