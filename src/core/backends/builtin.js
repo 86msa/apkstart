@@ -150,7 +150,8 @@ class BuiltinBackend extends Backend {
       freeMB,
       pending: false,
       verdict: memVerdict(memMB, host.totalMB),
-      note: '自带运行时的内存/CPU 下次启动安卓生效；数据分区改大后点「立即扩容」就地生效，已装应用与存档都保留。',
+      note: '自带运行时的内存/CPU 下次启动安卓生效；数据分区改大后点「立即扩容」——'
+        + '能就地扩就保留已装应用，安卓正在用快速启动差量盘时会提示你重置后按新容量重建。',
     };
   }
 
