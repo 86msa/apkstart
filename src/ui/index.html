@@ -511,6 +511,29 @@
         </details>
       </div>
 
+      <div class="group" id="driverGroup">
+        <div class="group-title">驱动 · 兼容补丁</div>
+        <div class="field">
+          <span class="sub">有些机器要改启动参数才跑得起来（老显卡 GLES 版本低、没开硬件加速、某版驱动一开硬件渲染就崩）。
+            驱动就是一份 JSON：声明「匹配哪些机器」+「命中后改哪些启动参数」。你可以自己写、导入、分享。
+            驱动只改白名单里的启动项，<b>不执行任何代码</b>；匹配不上就不生效。</span>
+        </div>
+        <div class="field">
+          <span class="sub" id="drvSummary">正在读取驱动…</span>
+        </div>
+        <div id="drvList" class="drv-list"></div>
+        <div class="field">
+          <div class="row">
+            <button class="btn ghost sm" id="btnDrvReload">刷新</button>
+            <button class="btn ghost sm" id="btnDrvImport">导入驱动…</button>
+            <button class="btn ghost sm" id="btnDrvFolder">打开驱动目录</button>
+            <button class="btn ghost sm" id="btnDrvExport">导出本机模板</button>
+          </div>
+          <span class="sub">「导出本机模板」会把匹配条件按这台机器填好，改 <code>effect</code> 里的
+            <code>gpuMode</code> / <code>forceTcg</code> 就能用。字段说明见仓库里的 <code>docs/drivers.md</code>。</span>
+        </div>
+      </div>
+
       <details class="advanced-group">
         <summary>高级参数（一般无需修改）</summary>
       <div class="group">

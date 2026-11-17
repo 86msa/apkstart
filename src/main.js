@@ -1467,6 +1467,113 @@ function registerIpc() {
   // 兼容旧界面：语义已改为「按设置重新同步」
   ipcMain.handle('settings:unhook', async () => { refreshPointerMapping(); return true; });
 
+  // ---------------- 驱动（兼容补丁） ----------------
+  // 一个驱动就是一份 JSON：声明「匹配哪些机器」+「命中后改哪些启动参数」。
+  // 这里只做「读目录 / 校验 / 匹配 / 导入 / 导出模板 / 开关」，不执行任何代码。
+
+  /** 组装当前机器画像 + 全部驱动 + 匹配结果（给设置页用） */
+  async function driverOverview() {
+    const drv = require('./core/drivers');
+    const doctor = require('./core/doctor');
+    const os = require('os');
+    const s = store.getSettings();
+    const disabled = (s.drivers && s.drivers.disabled) || [];
+    const state = (s.drivers && s.drivers.state) || {};
+    let accel = { ok: false, kind: 'none' };
+    try { accel = await runtime.provisioner.emulatorAccel(); } catch (_) { /* 没装运行时 */ }
+    let emulatorVersion = '';
+    try { emulatorVersion = (await runtime.provisioner.emulatorVersion()).version || ''; } catch (_) { /* ignore */ }
+    let osBuild = 0;
+    try {
+      const m = /(\d+)\s*$/.exec(os.release() || '');
+      osBuild = m ? Number(m[1]) : 0;
+    } catch (_) { /* ignore */ }
+    const host = drv.hostContext({
+      info: { ...doctor.hostInfo(), cpuVendor: (os.cpus() || [])[0]?.model || '' },
+      gpuVendor: doctor.detectGpuVendor(),
+      osBuild,
+      accel: accel && accel.ok ? (accel.kind || 'whpx') : 'none',
+      emulatorVersion,
+    });
+    const dirs = { user: drv.userDir(store), bundled: drv.bundledDir(APP_ROOT) };
+    const loaded = drv.loadAll([dirs.bundled, dirs.user]);
+    const resolved = drv.resolve({ drivers: loaded.drivers, host, state, disabled });
+    const hit = new Map(resolved.applied.map((d) => [d.id, d]));
+    return {
+      host,
+      dirs,
+      errors: loaded.errors,
+      effect: resolved.effect,
+      drivers: loaded.drivers.map((d) => {
+        const forced = typeof state[d.id] === 'boolean' ? state[d.id] : null;
+        return {
+          id: d.id,
+          name: d.name,
+          version: d.version,
+          author: d.author,
+          description: d.description,
+          priority: d.priority,
+          builtin: d.dir === dirs.bundled,
+          file: d.file,
+          enabled: forced !== null ? forced : d.enabled !== false,
+          matched: hit.has(d.id),
+          hits: (hit.get(d.id) || {}).hits || [],
+        };
+      }),
+    };
+  }
+
+  ipcMain.handle('drivers:list', () => driverOverview());
+
+  ipcMain.handle('drivers:openFolder', async () => {
+    const dir = require('./core/drivers').userDir(store);
+    fs.mkdirSync(dir, { recursive: true });
+    await shell.openPath(dir);
+    return { ok: true, dir };
+  });
+
+  ipcMain.handle('drivers:import', async () => {
+    const drv = require('./core/drivers');
+    const r = await dialog.showOpenDialog(mainWindow, {
+      title: '选择驱动文件（.json）',
+      filters: [{ name: '驱动 JSON', extensions: ['json'] }],
+      properties: ['openFile'],
+    });
+    if (r.canceled || !r.filePaths.length) return { ok: false, canceled: true };
+    const out = drv.importDriver(r.filePaths[0], drv.userDir(store));
+    if (out.ok) {
+      // 导入即启用：用户特意导入的补丁，默认应该立刻生效
+      const s = store.getSettings();
+      store.saveSettings({ drivers: { state: { ...(s.drivers.state || {}), [out.driver.id]: true } } });
+      send('runtime:log', `已导入驱动：${out.driver.name} v${out.driver.version}`);
+    }
+    return { ...out, overview: await driverOverview() };
+  });
+
+  ipcMain.handle('drivers:exportTemplate', async () => {
+    const drv = require('./core/drivers');
+    const overview = await driverOverview();
+    const tpl = drv.templateFromHost(overview.host);
+    const r = await dialog.showSaveDialog(mainWindow, {
+      title: '导出本机驱动模板',
+      defaultPath: path.join(drv.userDir(store), `${tpl.id}.json`),
+      filters: [{ name: '驱动 JSON', extensions: ['json'] }],
+    });
+    if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+    fs.mkdirSync(path.dirname(r.filePath), { recursive: true });
+    fs.writeFileSync(r.filePath, `${JSON.stringify(tpl, null, 2)}\n`, 'utf8');
+    return { ok: true, file: r.filePath, template: tpl };
+  });
+
+  ipcMain.handle('drivers:setEnabled', async (_e, { id, enabled } = {}) => {
+    const did = String(id || '');
+    if (!did) return { ok: false, error: '缺少驱动 id' };
+    const s = store.getSettings();
+    const prev = (s.drivers && s.drivers.state) || {};
+    store.saveSettings({ drivers: { state: { ...prev, [did]: !!enabled } } });
+    return { ok: true, overview: await driverOverview() };
+  });
+
   ipcMain.handle('runtime:status', async () => runtime.status());
   ipcMain.handle('runtime:probe', async () => runtime.probe());
   ipcMain.handle('runtime:start', async () => {

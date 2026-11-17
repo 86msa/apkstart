@@ -808,8 +808,98 @@ async function refreshResources() {
     + (r.verdict && r.verdict.note ? ` ${r.verdict.note}` : '');
 }
 
+/** 驱动（兼容补丁）：渲染清单 + 命中状态 */
+function renderDrivers(r) {
+  const list = $('drvList');
+  const sum = $('drvSummary');
+  if (!list) return;
+  const host = (r && r.host) || {};
+  const drivers = (r && r.drivers) || [];
+  const errors = (r && r.errors) || [];
+  const onCount = drivers.filter((d) => d.enabled && d.matched).length;
+  if (sum) {
+    const accel = host.accel === 'none' ? '无硬件加速' : (host.accel || '未知');
+    sum.textContent = `本机：${host.platform || ''}/${host.arch || ''} · ${host.gpuVendor || '未知'} 显卡 · ${accel}`
+      + ` · emulator ${host.emulatorVersion || '未知'}；驱动 ${drivers.length} 个，本机已生效 ${onCount} 个。`
+      + (errors.length ? ` ${errors.length} 个文件加载失败（见下）。` : '');
+  }
+  list.textContent = '';
+  for (const d of drivers) {
+    const item = document.createElement('div');
+    item.className = d.enabled ? 'drv-item on' : 'drv-item';
+
+    const head = document.createElement('div');
+    head.className = 'drv-head';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !!d.enabled;
+    cb.addEventListener('change', async () => {
+      const res = await api.driversSetEnabled(d.id, cb.checked).catch(() => null);
+      if (res && res.ok && res.overview) renderDrivers(res.overview);
+      else { cb.checked = !cb.checked; toast({ type: 'error', title: '保存失败', body: (res && res.error) || '请稍后再试' }); }
+    });
+    const name = document.createElement('span');
+    name.className = 'drv-name';
+    name.textContent = d.name;
+    head.append(cb, name);
+
+    if (d.matched && d.enabled) {
+      const b = document.createElement('span');
+      b.className = 'drv-badge hit';
+      b.textContent = '已生效';
+      head.append(b);
+    }
+    if (d.builtin) {
+      const b = document.createElement('span');
+      b.className = 'drv-badge';
+      b.textContent = '内置示例';
+      head.append(b);
+    }
+    item.append(head);
+
+    const meta = document.createElement('div');
+    meta.className = 'drv-meta';
+    meta.textContent = `v${d.version || '?'}`
+      + (d.author ? ` · ${d.author}` : '')
+      + ` · priority ${d.priority}`
+      + (d.hits && d.hits.length ? ` · 命中：${d.hits.join(' / ')}` : ' · 本机不匹配');
+    item.append(meta);
+
+    if (d.description) {
+      const desc = document.createElement('div');
+      desc.className = 'drv-meta';
+      desc.textContent = d.description;
+      item.append(desc);
+    }
+    list.append(item);
+  }
+  for (const e of errors) {
+    const err = document.createElement('div');
+    err.className = 'drv-err';
+    err.textContent = `${String(e.file || '').split(/[\\/]/).pop()}：${(e.errors || []).join('；')}`;
+    list.append(err);
+  }
+  if (!drivers.length && !errors.length) {
+    const empty = document.createElement('div');
+    empty.className = 'drv-meta';
+    empty.textContent = '还没有任何驱动。可以点「导出本机模板」做一个，或导入别人做好的 JSON。';
+    list.append(empty);
+  }
+}
+
+async function refreshDrivers() {
+  if (!$('drvList')) return;
+  const r = await api.driversList().catch(() => null);
+  if (!r) {
+    if ($('drvSummary')) $('drvSummary').textContent = '读不到驱动列表（运行时可能还没部署）';
+    return;
+  }
+  renderDrivers(r);
+}
+
 function fillSettings(s) {
   syncBackendFields();
+  refreshDrivers().catch(() => {});
   $('setAdbPath').value = s.adbPath || '';
   $('setSystemImage').value = s.runtime.isoPath || '';
   $('setMemory').value = s.engine.memoryMB;
@@ -1048,6 +1138,35 @@ function bindSettings() {
   const save = async (patch) => {
     state.settings = await api.setSettings(patch);
   };
+
+  if ($('btnDrvReload')) $('btnDrvReload').addEventListener('click', () => refreshDrivers());
+  if ($('btnDrvFolder')) {
+    $('btnDrvFolder').addEventListener('click', async () => {
+      const r = await api.driversOpenFolder().catch(() => null);
+      if (!r || !r.ok) toast({ type: 'error', title: '打不开驱动目录' });
+    });
+  }
+  if ($('btnDrvImport')) {
+    $('btnDrvImport').addEventListener('click', async () => {
+      const r = await api.driversImport().catch(() => null);
+      if (!r || r.canceled) return;
+      if (!r.ok) {
+        toast({ type: 'error', title: '导入失败', body: (r.errors || []).slice(0, 3).join('；') });
+        return;
+      }
+      toast({ type: 'ok', title: '驱动已导入并启用', body: `${r.driver.name} v${r.driver.version}` });
+      if (r.overview) renderDrivers(r.overview);
+    });
+  }
+  if ($('btnDrvExport')) {
+    $('btnDrvExport').addEventListener('click', async () => {
+      const r = await api.driversExportTemplate().catch(() => null);
+      if (!r || r.canceled) return;
+      if (!r.ok) { toast({ type: 'error', title: '导出失败' }); return; }
+      toast({ type: 'ok', title: '模板已导出', body: '改完 effect 后放到驱动目录，点「刷新」即可生效' });
+      refreshDrivers();
+    });
+  }
 
   $('setAdbPath').addEventListener('change', (e) => save({ adbPath: e.target.value.trim() }));
   $('setSystemImage').addEventListener('change', (e) => save({ runtime: { isoPath: e.target.value.trim() } }));

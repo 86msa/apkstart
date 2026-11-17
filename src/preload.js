@@ -45,6 +45,13 @@ contextBridge.exposeInMainWorld('apkstart', {
   dataInfo: () => invoke('runtime:dataInfo'),
   setDataSize: (gb) => invoke('runtime:setDataSize', gb),
   resources: () => invoke('engine:resources'),
+  // 驱动（兼容补丁）：列清单 / 导入 / 打开目录 / 导出本机模板 / 启用停用
+  driversList: () => invoke('drivers:list'),
+  driversImport: () => invoke('drivers:import'),
+  driversOpenFolder: () => invoke('drivers:openFolder'),
+  driversExportTemplate: () => invoke('drivers:exportTemplate'),
+  driversSetEnabled: (id, enabled) => invoke('drivers:setEnabled', { id, enabled }),
+
   resetAndResize: (gb) => invoke('runtime:resetAndResize', gb),
   confirm: (opts) => invoke('app:confirm', opts || {}),
   displayState: () => invoke('display:state'),

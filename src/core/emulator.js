@@ -16,6 +16,7 @@ const path = require('path');
 const store = require('./store');
 const { Provisioner } = require('./provision');
 const doctor = require('./doctor');
+const drivers = require('./drivers');
 const userdata = require('./userdata');
 
 const AVD_NAME = 'apkstart';
@@ -56,6 +57,12 @@ class EmulatorEngine {
     this.attempts = [];
     this.lastDiagnosis = null;
     this.lastExitCode = null;
+    /**
+     * 本次开机生效的驱动（兼容补丁）效果，以及命中的驱动清单。
+     * 由 start() 里的 _resolveDrivers() 填；buildArgs / env / ensureAvd 只读它。
+     */
+    this._driverEffect = null;
+    this._driversApplied = [];
     // 快照的 ram.bin ≈ 分配给虚拟机的内存（2-4GB）。
     // 冷启动本来就快的机器不该为它付出几个 GB 的磁盘，只在「真慢」时才保存。
     this.snapshotWorthSaving = null;
@@ -294,6 +301,90 @@ class EmulatorEngine {
   }
 
   /**
+   * 给界面/诊断用的驱动报告：这次开机用了哪些、跳过了哪些、为什么。
+   * @returns {{ applied:Array, effect:object|null, errors:Array, host:object|null }}
+   */
+  driverReport() {
+    const pick = (d) => ({
+      id: d.id, name: d.name, version: d.version, author: d.author || '',
+      description: d.description || '', priority: d.priority, hits: d.hits || [],
+      dir: d.dir || '', file: d.file || '',
+    });
+    return {
+      applied: (this._driversApplied || []).map(pick),
+      effect: this._driverEffect ? {
+        gpuMode: this._driverEffect.gpuMode,
+        forceTcg: this._driverEffect.forceTcg,
+        notes: this._driverEffect.notes || [],
+        ini: this._driverEffect.ini || {},
+        env: this._driverEffect.env || {},
+        args: (this._driverEffect.args || []).map((a) => (a.value ? `${a.flag}=${a.value}` : a.flag)),
+      } : null,
+      errors: this._driverErrors || [],
+      host: this._driverHost || null,
+    };
+  }
+
+  /**
+   * 把驱动声明的 config.ini 覆盖项套到默认配置上。
+   * 已存在的键就地替换（不产生重复行），不存在的追加在后面。
+   * 只处理 drivers.js 白名单里的键，非法键在校验阶段就被拒了。
+   */
+  _iniWithDrivers(text) {
+    const over = (this._driverEffect && this._driverEffect.ini) || {};
+    const keys = Object.keys(over);
+    if (!keys.length) return text;
+    const seen = new Set();
+    const out = String(text).split('\n').map((line) => {
+      const m = /^([A-Za-z0-9_.]+)=/.exec(line);
+      if (!m || !(m[1] in over)) return line;
+      seen.add(m[1]);
+      return `${m[1]}=${over[m[1]]}`;
+    });
+    for (const k of keys) if (!seen.has(k)) out.push(`${k}=${over[k]}`);
+    return out.join('\n');
+  }
+
+  /**
+   * 读一遍驱动目录，挑出匹配这台机器的，存成本次开机的效果。
+   *
+   * 目录顺序即优先级：内置示例（只读，默认 enabled:false）在前，用户驱动在后，
+   * 同 id 时用户目录覆盖内置 —— 用户改了示例就能直接生效，不用改安装目录。
+   *
+   * @returns {{ applied:Array, skipped:Array, errors:Array } | null}
+   */
+  _resolveDrivers({ accel, emulatorVersion }) {
+    const s = this.settings || {};
+    const disabled = (s.drivers && s.drivers.disabled) || [];
+    const state = (s.drivers && s.drivers.state) || {};
+    let gpuName = '';
+    let osBuild = 0;
+    try {
+      const release = require('os').release() || '';
+      const m = /(\d+)\s*$/.exec(release);
+      osBuild = m ? Number(m[1]) : 0;
+    } catch (_) { /* 拿不到就当 0，匹配条件里带 osBuild 的驱动不会生效 */ }
+    const host = drivers.hostContext({
+      info: { ...doctor.hostInfo(), cpuVendor: (require('os').cpus() || [])[0]?.model || '' },
+      gpuVendor: doctor.detectGpuVendor(),
+      gpuName,
+      osBuild,
+      accel: accel && accel.ok ? (accel.kind || 'whpx') : 'none',
+      emulatorVersion,
+    });
+    const loaded = drivers.loadAll([
+      drivers.bundledDir(this.appRoot),
+      drivers.userDir(store),
+    ]);
+    const r = drivers.resolve({ drivers: loaded.drivers, host, disabled, state });
+    this._driverEffect = r.effect;
+    this._driversApplied = r.applied;
+    this._driverErrors = loaded.errors;
+    this._driverHost = host;
+    return { ...r, errors: loaded.errors, host };
+  }
+
+  /**
    * 准备 AVD：写 config.ini。每次启动按当前自动配置重写，保证降级重试即时生效。
    */
   ensureAvd({
@@ -408,7 +499,7 @@ class EmulatorEngine {
       // wm density（改 smallestWidth），不需要也不允许传感器参与。
       'hw.sensors.orientation=no',
     ].join('\n') + '\n';
-    fs.writeFileSync(cfgPath, cfg);
+    fs.writeFileSync(cfgPath, this._iniWithDrivers(cfg));
 
     // /data 分区必须先「真的能用」，否则后面一切都是白等（见 ensureDataPartition 注释）
     const data = this.ensureDataPartition(avdDir, dataMB);
@@ -523,6 +614,8 @@ class EmulatorEngine {
       ANDROID_ADB_SERVER_PORT: adbPort,
       ANDROID_EMULATOR_USE_SYSTEM_LIBS: '',
       ...(plan.accel === 'off' ? { ANDROID_I_WANT_MY_TCG: 'yes' } : {}),
+      // 驱动声明的环境变量：只放行 ANDROID_/QEMU_/LIBGL_/MESA_/EMUGL_ 前缀（见 drivers.js）
+      ...((this._driverEffect && this._driverEffect.env) || {}),
     };
   }
 
@@ -541,6 +634,12 @@ class EmulatorEngine {
     gpu = 'software', memoryMB = 2048, cores = 2,
     snapshot = true, wipe = false, lcd = null,
   } = {}) {
+    // 驱动可以固定渲染后端 / 强制软件模拟。放在最前面算进 gpu/accel，
+    // 这样后面所有逻辑（-accel off、config.ini 的 hw.gpu.mode）都跟着它走。
+    const eff = this._driverEffect || null;
+    const drvGpu = eff ? drivers.gpuModeToArg(eff.gpuMode) : '';
+    if (drvGpu) gpu = drvGpu;
+    if (eff && eff.forceTcg) accel = 'off';
     const args = [
       '-avd', AVD_NAME,
       '-port', String(port),
@@ -618,6 +717,13 @@ class EmulatorEngine {
     }
     if (wipe) args.push('-wipe-data');
     if (accel === 'off') args.push('-accel', 'off');
+    // 驱动声明的其它参数：-gpu / -accel 已经由上面的 gpu/accel 统一处理，这里跳过，
+    // 避免同一个参数出现两次（emulator 对重复参数的行为在不同版本上不一致）。
+    for (const a of ((eff && eff.args) || [])) {
+      if (a.flag === '-gpu' || a.flag === '-accel') continue;
+      if (a.value === '') args.push(a.flag);
+      else args.push(a.flag, a.value);
+    }
     return args;
   }
 
@@ -1124,13 +1230,45 @@ class EmulatorEngine {
     const emuVersion = verInfo.version || '';
     this._emuVersion = emuVersion;
 
+    // 驱动（兼容补丁）：先看清这台机器是什么样，再看有没有人给它写过补丁。
+    // 这一步只读 JSON，不执行任何代码；匹配不上就是空效果，行为和以前完全一致。
+    let drv = { applied: [], skipped: [], errors: [], effect: null };
+    try {
+      drv = this._resolveDrivers({ accel: accelInfo, emulatorVersion: emuVersion });
+    } catch (e) {
+      this.log(`驱动加载失败：${e.message}`);
+      onLog(`驱动加载失败（已忽略，按默认参数启动）：${e.message}`);
+    }
+    if (drv.applied.length) {
+      onLog(`已应用驱动：${drv.applied.map((d) => `${d.name} v${d.version}`).join('、')}`);
+      for (const n of (this._driverEffect.notes || []).slice(0, 4)) onLog(`· ${n}`);
+    } else {
+      onLog('未匹配到任何驱动，按默认参数启动');
+    }
+    if (drv.errors && drv.errors.length) {
+      onLog(`有 ${drv.errors.length} 个驱动文件没加载成功（设置 → 驱动 里能看到原因）`);
+    }
+
     // 与设置页 / 诊断报告共用同一个入口，保证「显示的」就是「实跑的」
     const profile = doctor.autoProfile({
       settings: s, accel: accelInfo, emulatorVersion: emuVersion, diskMB,
       port: startPort, adbPort,
     });
     this.profile = profile;
-    const variants = doctor.planVariants(profile).slice(0, maxAttempts);
+    let variants = doctor.planVariants(profile).slice(0, maxAttempts);
+    // 驱动指定了渲染后端 / 要求软件模拟时，每一轮都按它来：
+    // 用户装驱动的目的就是「这台机器只能用这一档」，继续先试崩过的后端只会白等。
+    if (drv.applied.length && this._driverEffect) {
+      const gpuFixed = drivers.gpuModeToArg(this._driverEffect.gpuMode);
+      if (gpuFixed) {
+        variants = variants.map((v) => ({ ...v, gpu: gpuFixed }));
+        onLog(`驱动把渲染后端固定为 ${gpuFixed}`);
+      }
+      if (this._driverEffect.forceTcg) {
+        variants = variants.map((v) => ({ ...v, accel: 'off', label: `${v.gpu} / 驱动要求软件模拟` }));
+        onLog('驱动要求关闭硬件加速（走软件模拟）');
+      }
+    }
 
     // 记住「上次拉起就崩」的 GPU 后端，下次把它排到最后。
     // 实测：AMD Radeon 780M 上 `-gpu host` 能通过 emulator 自己的硬件检查，
@@ -1150,6 +1288,7 @@ class EmulatorEngine {
     const logFile = path.join(store.DATA_DIR, 'logs', 'emulator.log');
     fs.mkdirSync(path.dirname(logFile), { recursive: true });
     this._logWrite(logFile, `\n\n=== ${new Date().toISOString()} START ${doctor.describeProfile(profile)} ===\n`);
+    this._logWrite(logFile, `drivers: ${drv.applied.length ? drv.applied.map((d) => `${d.id}@${d.version}`).join(', ') : '(none)'}\n`);
 
     // 屏幕规格在整个启动过程中保持一致，否则每次重试都换分辨率会狂清快照。
     // 分辨率来自 doctor 的 profile（设置里可改「画质」），auto 时按加速状态选。
