@@ -2373,6 +2373,12 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(/if \(this\.detachedMode && !this\._showWhileWaiting\) return;/.test(appwin),
       'ready-to-show 只在 showWhileWaiting 时才显示壳窗口');
     assert(/正在为《[\s\S]{0,40}切换到/.test(mainJs), '提示文案要说清为什么慢');
+    // 真正开始换向重启时，pre-attach 可能已经把壳窗口收起来了 —— 必须再亮一次，
+    // 否则重启那 40 秒桌面全空（用户以为程序退出了）。
+    assert(/appWin\.showWaiting\(/.test(mainJs), '重启换向前要重新亮出等待窗口');
+    assert(/waitingForRestart/.test(appwin), '要有「正在等待重启」标记');
+    // 启动阶段的 pre-attach 轮询看到标记必须让路，不能把等待窗口又 hide 掉
+    assert(/if \(appWin\.waitingForRestart\)/.test(mainJs), 'pre-attach 要让路');
   });
 
   await test('标题要在 show 之前设，否则会闪上一个应用的名字', () => {
@@ -2427,6 +2433,16 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     // stop() 关干净后必须丢掉启动器句柄，否则 running() 永远为 true
     const stopFn = emuJs.slice(emuJs.indexOf('async stop('), emuJs.indexOf('async stop(') + 1800);
     assert(/killAttempt\(\)[\s\S]{0,200}this\.proc = null;/.test(stopFn), 'stop() 收尾要清掉 this.proc');
+    // engine 层还要防另一种假象：模拟器刚退出时 adb 仍短时报 device，
+    // isOnline() 于是判成就绪，后续命令全部 device not found。
+    const engineJs = fs.readFileSync(path.join(root, 'src', 'core', 'engine.js'), 'utf8');
+    const inner = engineJs.slice(engineJs.indexOf('async _ensureInner('), engineJs.indexOf('async _ensureInner(') + 2200);
+    assert(/getprop sys\.boot_completed/.test(inner), 'ensure 要补一条真实命令验证设备可用');
+    assert(/probe !== null/.test(inner), '命令不通时不能复用旧客户端');
+    // 换向前后要等 adb 侧设备真的消失，再拉起新机器
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    const rot = mainJs.slice(mainJs.indexOf('async function restartForOrientation'), mainJs.indexOf('async function restartForOrientation') + 2600);
+    assert(/c\.isOnline\(\)\.catch\(\(\) => false\)/.test(rot), 'stop 后要等 adb 设备消失');
   });
 
   await test('Windows Terminal 弹出的开机黑框也要能认出来', () => {
@@ -2712,8 +2728,14 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     // 收动画前必须等首帧，否则用户看到白底 + 应用图标，以为卡死
     const idx = mainJs.indexOf('waitForAppFirstFrame');
     assert(idx > 0, 'main 要调用 waitForAppFirstFrame');
-    const after = mainJs.slice(idx, idx + 400);
+    const after = mainJs.slice(idx, idx + 800);
     assert(/splashDone/.test(after), '首帧之后才 splashDone');
+    // 判定必须用 `dumpsys window`：`dumpsys window windows` 里没有 mCurrentFocus，
+    // 会把焦点判断永远判成否，导致每次启动都白等满超时。
+    assert(/dumpsys window \| grep -E "Splash Screen\|mCurrentFocus"/.test(adbJs),
+      '首帧判定要用 dumpsys window（含 mCurrentFocus）');
+    // 红果这类重应用首帧要 15 秒以上，12 秒超时会把动画提前收掉
+    assert(/timeoutMs:\s*20000/.test(mainJs), '首帧等待给足 20 秒');
   });
 
   await test('启动提速：权限授过就不再重复授（省 20s+）', () => {

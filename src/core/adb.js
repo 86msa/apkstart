@@ -1024,8 +1024,12 @@ class AdbClient {
   async waitForAppFirstFrame(pkg, { timeoutMs = 12000, intervalMs = 350 } = {}) {
     const t0 = Date.now();
     while (Date.now() - t0 < timeoutMs) {
+      // 必须用 `dumpsys window`（WINDOW MANAGER 全量），不能用
+      // `dumpsys window windows`：后者只列窗口，**没有 mCurrentFocus 这一行**，
+      // focusOnApp 于是永远是 false，判定必然超时 —— 表现就是应用明明已经画出
+      // 画面，开机动画还要再钉满 12 秒才肯淡出。
       const out = await this.shell(
-        'dumpsys window windows | grep -E "Splash Screen|mCurrentFocus" | head -6',
+        'dumpsys window | grep -E "Splash Screen|mCurrentFocus" | head -8',
         { timeout: 8000 },
       ).catch(() => '');
       const s = String(out);

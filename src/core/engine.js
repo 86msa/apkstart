@@ -980,8 +980,27 @@ class Runtime {
   async _ensureInner({ onLog = () => {} } = {}) {
     const client = this.client();
     if (await client.isOnline()) {
-      await this.prepare(client);
-      return { ok: true, client, engine: 'builtin', reused: true };
+      /**
+       * 「在线」不等于「能干活」。
+       *
+       * 模拟器进程刚退出、或正在重启的那几百毫秒里，adb 对
+       * `-s emulator-5554 get-state` 仍然回 `device`。旧逻辑据此直接
+       * returned reused，换面板方向的启动链于是拿到一个已经死掉的客户端 ——
+       * 后面每条命令都是 `device 'emulator-5554' not found`（实测 ensure
+       * 0.2 秒就"就绪"，应用启动全军覆没）。
+       *
+       * 这里补一条真实命令：能执行 getprop 才算设备真的在（返回 0 说明还在
+       * 开机，那是正常情况，按原逻辑复用并等待）；命令失败则当作没就绪，
+       * 继续走下面的拉起流程。
+       */
+      const probe = await client.shell('getprop sys.boot_completed', { timeout: 5000 })
+        .then((v) => String(v == null ? '' : v).trim())
+        .catch(() => null);
+      if (probe !== null) {
+        await this.prepare(client);
+        return { ok: true, client, engine: 'builtin', reused: true };
+      }
+      onLog('adb 报告设备在线但命令不通（模拟器可能正在重启），重新拉起运行时…');
     }
 
     // 上一次 ApkStart 退出时模拟器会留着（下次点开秒进），但新进程里没有它的

@@ -100,6 +100,9 @@ function appLog(line) {
 }
 process.on('uncaughtException', (e) => appLog(`UNCAUGHT ${e && (e.stack || e.message)}`));
 process.on('unhandledRejection', (e) => appLog(`REJECT ${e && (e.stack || e.message || e)}`));
+// 退出时留一行退出码：静默退出（没有崩溃栈、没有 before-quit）时，靠它区分
+// 「正常退出」「被任务管理器结束」「被系统关机带走」。
+process.on('exit', (code) => appLog(`process exit code=${code}`));
 
 /**
  * 完整版（内置运行时）自动接管：
@@ -455,16 +458,44 @@ async function restartForOrientation(landscape, { reloadApp = true } = {}) {
   store.saveSettings({ display: { landscape: !!landscape } });
   send('runtime:log', landscape ? '切换到横屏：正在重启安卓运行时…' : '切换回竖屏：正在重启安卓运行时…');
   try {
+    // 重启会把模拟器窗口销毁、再重新建一个。这段时间屏幕上不能空着，
+    // 独立窗口模式下先把带提示的壳窗口亮出来（新窗口接上后 openDetached 会收掉）。
+    try {
+      appWin.showWaiting(landscape
+        ? '正在切换到横屏（重启安卓环境，约 40 秒，只需一次）…'
+        : '正在切换回竖屏（重启安卓环境，约 40 秒，只需一次）…');
+    } catch (_) { /* 窗口可能刚关 */ }
     // 先把嵌入窗口摘下来，避免重启过程中在桌面留下黑窗
     try { await appWin.agent.detach(); } catch (_) { /* ignore */ }
     await runtime.stop({ graceful: false }).catch(() => {});
+    /**
+     * 等 adb 侧真正看不到这台设备，再重新拉起。
+     *
+     * 模拟器进程退出和 adb 侧状态更新之间有几百毫秒的空档：这段时间
+     * `adb -s emulator-5554 get-state` 仍然回 "device"。紧接着调 ensure()，
+     * 它会走 isOnline() 直接判定「运行时就绪（reused）」并秒返回，
+     * 但后面每一条 adb 命令都是 `device 'emulator-5554' not found` ——
+     * 换面板方向时整条启动链就这么崩了（实测 0.2 秒"就绪"，然后全部失败）。
+     */
+    try {
+      const c = runtime.client();
+      for (let i = 0; i < 14; i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        const online = await c.isOnline().catch(() => false);
+        if (!online) break;
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => setTimeout(r, 300));
+      }
+    } catch (_) { /* 判定失败就直接继续，ensure 里还有兜底 */ }
     appLog(`rotate -> landscape=${landscape} restarting runtime`);
     const rt = await runtime.ensure({
       onLog: (m) => { send('runtime:log', m); appLog(`  rt ${m}`); },
     });
-    if (!rt || !rt.ok) return false;
-    await runtime.waitForNetwork({ onLog: () => {}, timeoutMs: 25000 }).catch(() => null);
-    // reloadApp=false：调用方（runLaunch）自己会把应用拉起来，这里别抢着做一遍
+    if (!rt || !rt.ok) { appWin.waitingForRestart = false; return false; }
+    // 这里**不再**等网络。刚重启的模拟器 WiFi 要 20 秒以上才就绪，而调用方
+    // （launcher 的 beforeStart → installer.launch）紧接着还会走一遍 waitForNetwork，
+    // 两段等待纯属叠加：实测切换方向时第一段白等满 25 秒超时，第二段又等 23 秒，
+    // 一次换向从 100 秒拖到 125 秒。让 launch 流程统一等一次就够。
     if (reloadApp && pkg) {
       const app = store.getApp(pkg);
       if (app) {
@@ -479,6 +510,7 @@ async function restartForOrientation(landscape, { reloadApp = true } = {}) {
     return rt;
   } catch (e) {
     appLog(`rotate restart failed: ${e && e.message}`);
+    try { appWin.waitingForRestart = false; } catch (_) { /* 窗口已销毁 */ }
     return false;
   }
 }
@@ -660,10 +692,17 @@ async function autoDeploy({ force = false } = {}) {
     if (bundledRuntimeDir && env.adb.ok && env.emulator.ok && env.sysimg.ok) {
       appLog(`autoDeploy 跳过：运行时随包内置（${bundledRuntimeDir}），无需联网`
         + (env.needsExtract ? '，镜像将在首次启动时本地展开' : ''));
+      // 这是**成功**，不是失败。以前这里直接 return 没置 succeeded，finally 就按
+      // 失败写了 deployFailedAt —— 随包内置运行时的机器每 30 分钟被记一次
+      // 「部署失败」，日志里那句「上次失败于 …」其实来自一次正常的跳过，
+      // 用户看到设置页的「重试部署」也会一头雾水。
+      succeeded = true;
       return { ok: true, source: 'bundled', needsExtract: !!env.needsExtract };
     }
     if (bundledRuntimeDir && !env.emulator.ok) {
       appLog(`autoDeploy 跳过联网下载：运行时目录随包内置（${bundledRuntimeDir}），交给诊断流程`);
+      // 交回诊断流程同样不是「下载失败」，别进冷却。
+      succeeded = true;
       return { ok: false, error: 'bundled', bundled: true };
     }
     // 轻量版优先用「本项目 GitHub 的运行时整包」：一个文件搞定 emulator + 系统镜像，
@@ -1174,8 +1213,19 @@ async function launchOne(pkg) {
      */
     if (displaySettings().windowEmbed === false && appWin && appWin.isOpen) {
       let tries = 0;
+      let rounds = 0;
       const preAttach = async () => {
         if (!appWin || !appWin.isOpen) return;
+        rounds += 1;
+        // 硬上限：无论让路还是失败，最多跑 45 轮（约 1 分钟）就收手，
+        // 避免换向失败后这个定时器一直挂着空转。
+        if (rounds > 45) return;
+        // 正在换面板方向、准备重启运行时：这时候去接画面只会把刚亮起的
+        // 等待窗口藏掉，屏幕上就没东西了。让路，等重启完成再接手。
+        if (appWin.waitingForRestart) {
+          setTimeout(preAttach, 1500);
+          return;
+        }
         tries += 1;
         // eslint-disable-next-line no-await-in-loop
         const ok = await appWin.openDetached().catch(() => false);
@@ -1216,7 +1266,10 @@ async function launchOne(pkg) {
             try {
               const c = runtime.client();
               if (c && typeof c.waitForAppFirstFrame === 'function') {
-                painted = await c.waitForAppFirstFrame(pkg, { timeoutMs: 12000 });
+                // 红果这类重应用从 am start 到真正画出首帧可能超过 15 秒，
+              // 12 秒就放弃会让开机动画提前收掉、露出系统 Splash 的白底图标。
+              // 20 秒给足余量；真画不出来也只是多等一会儿，不会卡死流程。
+              painted = await c.waitForAppFirstFrame(pkg, { timeoutMs: 20000 });
               }
             } catch (_) { /* 判定失败按已就绪处理 */ }
             mark(`first frame=${painted}`);
@@ -3150,12 +3203,24 @@ if (!gotLock) {
   app.on('window-all-closed', () => {
     // 正常关闭窗口时只隐藏到托盘（close 事件已拦截），
     // 走到这里说明是真正要退出，必须放行，否则进程会残留并占住单实例锁。
+    // 记一行：排查「应用窗口明明开着，ApkStart 却自己没了」时，这行能直接
+    // 区分「所有窗口被收干净」和「进程被外部杀掉」。
+    appLog(`window-all-closed quitting=${quitting}`);
     if (quitting) app.exit(0);
+  });
+
+  // 渲染进程 / GPU 进程崩溃时，Electron 默认只是让窗口变白，不一定会退出主进程；
+  // 但它是「画面突然没了」最常见的原因，一定要在日志里留痕。
+  app.on('child-process-gone', (_e, d) => {
+    try {
+      appLog(`child-process-gone type=${d && d.type} reason=${d && d.reason} exit=${d && d.exitCode}`);
+    } catch (_) { /* 日志写不进去不影响 */ }
   });
 
   let quitReady = false;
   app.on('before-quit', (e) => {
     quitting = true;
+    appLog(`before-quit ready=${quitReady}`);
     // 退出前必须先让窗口代理把模拟器窗口「摘下 + 藏好」。这一步是异步的
     // （要等代理回包），所以第一次 before-quit 先拦下来，收尾完成再真正退出。
     // 少了这一步，宿主窗口一销毁，Windows 会把模拟器子窗口重挂到桌面并显示出来——
