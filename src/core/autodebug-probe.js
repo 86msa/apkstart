@@ -70,6 +70,20 @@ function countOrphanProcesses() {
 }
 
 /** 读最近日志文件里的错误行（最多看尾部 300 行） */
+// eslint-disable-next-line no-control-regex
+const ANSI_RE = /\x1b\[[0-9;]*[A-Za-z]|\[[0-9;]*m/g;
+function stripAnsi(s) { return String(s).replace(ANSI_RE, ''); }
+
+/**
+ * 模拟器会自己兜底、不影响使用的「错误」行，不算进自动检测：
+ * 核显 / 老驱动没有可用的 Vulkan 时，模拟器打印这两行后自动关掉 Vulkan 继续用 GL，
+ * 画面和速度都正常（用户实测：Intel UHD + 驱动 31.0.101.2137）。
+ */
+const BENIGN_LOG_ERRORS = [
+  /Failed to create Vulkan instance/i,
+  /Failed to initialize global Vulkan emulation/i,
+];
+
 function recentLogErrors(files, max = 300) {
   const out = [];
   for (const file of files) {
@@ -85,10 +99,12 @@ function recentLogErrors(files, max = 300) {
       } finally { fs.closeSync(fd); }
     } catch (_) { continue; }
     const lines = text.split(/\r?\n/).slice(-max);
-    for (const line of lines) {
-      if (/\b(ERROR|FATAL|FATAL ERROR|Exception|FATAL:|panic:)\b/i.test(line)) {
-        out.push(line.trim().slice(0, 240));
-      }
+    for (const raw of lines) {
+      // 模拟器日志带 ANSI 颜色码（\x1b[31m…），不去掉的话界面上会显示成乱码
+      const line = stripAnsi(raw).trim();
+      if (!/\b(ERROR|FATAL|FATAL ERROR|Exception|FATAL:|panic:)\b/i.test(line)) continue;
+      if (BENIGN_LOG_ERRORS.some((re) => re.test(line))) continue;
+      out.push(line.slice(0, 240));
     }
   }
   return out.slice(-20);
@@ -151,7 +167,7 @@ async function collect(ctx) {
     phase,
     ready,
     bootMs: bootingSince ? Date.now() - bootingSince : 0,
-    error: (status && status.error && !/缺少 adb/.test(status.error)) ? status.error : '',
+    error: (status && status.error && !/缺少 adb|adb مفقود/.test(status.error)) ? status.error : '',
     lastFailure: lastFailure ? { error: lastFailure.error || lastFailure.reason || '' } : null,
     locks: paths ? countLocks(paths.avdHome) : 0,
     orphans: null,

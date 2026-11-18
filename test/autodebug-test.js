@@ -92,8 +92,28 @@ test('unauthorized 是严重问题（安卓弹了授权框没人点）', () => {
 test('offline 与 no-device 区分开，且严重度不同', () => {
   const off = ad.evaluate({ device: { checked: true, state: 'offline' } });
   assert(codes(off).includes('device.offline'), '应报 offline');
-  const none = ad.evaluate({ runtime: { running: true }, device: { checked: true, state: 'no-device' } });
+  const none = ad.evaluate({ runtime: { running: true, ready: true }, device: { checked: true, state: 'no-device' } });
   assert(codes(none).includes('device.missing'), '应报设备缺失');
+  const stuck = ad.evaluate({ runtime: { running: true, bootMs: 200000 }, device: { checked: true, state: 'no-device' } });
+  assert(codes(stuck).includes('device.missing'), '开机超过 3 分钟仍看不到设备要报');
+});
+
+test('开机过程中 adb 暂时看不到设备不算问题', () => {
+  const booting = ad.evaluate({ runtime: { running: true, ready: false, bootMs: 20000 }, device: { checked: true, state: 'no-device' } });
+  assert(!codes(booting).includes('device.missing'), '开机中不该报设备缺失');
+});
+
+test('日志检测去掉 ANSI 颜色码，并忽略模拟器自己兜底的 Vulkan 报错', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'adlog-')), 'emu.log');
+  fs.writeFileSync(f, '\x1b[0;39m\x1b[31mERROR        | Failed to create Vulkan instance. Error VK_ERROR_INCOMPATIBLE_DRIVER.\x1b[0;39m\n'
+    + '\x1b[31mERROR        | Failed to initialize global Vulkan emulation requested.\x1b[0m\n'
+    + '\x1b[0;39mFATAL        | Running multiple emulators with the same AVD\n');
+  const errs = require('../src/core/autodebug-probe').recentLogErrors([f]);
+  assert(errs.length === 1, `只应剩 1 条，实际 ${errs.length}`);
+  assert(!/\x1b|\[0;39m/.test(errs[0]), '不应残留颜色码');
 });
 
 console.log('\n[自动检测 · 存储]');

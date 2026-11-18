@@ -155,7 +155,10 @@ function evaluate(obs) {
       hint: __('adb 能看到设备但连不上，通常是虚拟机还在引导或 adb 服务没握手成功。等一会儿仍不恢复就重启运行时。'),
       fix: 'restartRuntime',
     });
-  } else if (runtime.running && device.checked && device.state === 'no-device') {
+  } else if (runtime.running && device.checked && device.state === 'no-device'
+    // 开机过程中 adb 本来就暂时看不到设备，这不是问题：
+    // 只有已就绪、或开机已超过 3 分钟（「卡在引导」另有一条检测）时才提示。
+    && (runtime.ready || (Number(runtime.bootMs) || 0) > 180000)) {
     push({
       code: 'device.missing',
       category: 'device',

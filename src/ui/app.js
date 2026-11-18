@@ -484,7 +484,7 @@ async function markInstalled() {
 /** 把安装失败翻译成「下一步该做什么」，只对最常见的几种做提示，其它原样显示 */
 function friendlyInstallErrorText(msg) {
   const s = String(msg || __('未知错误'));
-  if (/INSUFFICIENT_STORAGE|not enough space|空间不足|ENOSPC/i.test(s)) {
+  if (/INSUFFICIENT_STORAGE|not enough space|空间不足|مساحة|ENOSPC/i.test(s)) {
     return __('{0}\n安卓数据分区不够用：设置 → 性能与资源占用 → 安卓数据分区调大后点「立即扩容」。', s);
   }
   if (/NO_MATCHING_ABIS/i.test(s)) return __('{0}\n这个包只有 ARM 库，正在自动切换兼容镜像后重试。', s);
@@ -857,6 +857,7 @@ function renderPreflight(res) {
     if (it.detail) {
       const d = document.createElement('div');
       d.className = 'pf-detail';
+      d.dir = 'auto';
       d.textContent = it.detail;
       item.append(d);
     }
@@ -1291,7 +1292,7 @@ function renderAutodebug(res) {
           <div class="dbg-body">
             <div class="dbg-name">${esc(it.title || '')}</div>
             <div class="dbg-hint">${esc(it.hint || '')}</div>
-            ${it.detail ? `<div class="dbg-detail">${esc(it.detail)}</div>` : ''}
+            ${it.detail ? `<div class="dbg-detail" dir="auto">${esc(it.detail)}</div>` : ''}
           </div>
           ${it.fix ? `<button class="dbg-fix" data-code="${esc(it.code)}">${__('处理')}</button>` : ''}
         </div>`).join('')}
