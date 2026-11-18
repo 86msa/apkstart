@@ -1,0 +1,73 @@
+/*
+ * 从右到左（RTL）界面：阿拉伯语等语言。
+ * i18n 会在 <html> 上写 dir="rtl"；flex / grid 会自动镜像，这里只修正
+ * 写死了 left / right 的地方，并给 RTL 文字换上显示效果更好的字体。
+ */
+
+[dir="rtl"] body {
+  font-family: "Segoe UI Variable Text", "Segoe UI", Tahoma, "Noto Sans Arabic", "Arial", system-ui, sans-serif;
+}
+
+/* 代码、按键、路径、版本号保持从左到右，避免和阿拉伯语混排时符号跑位 */
+[dir="rtl"] code,
+[dir="rtl"] kbd,
+[dir="rtl"] .mono {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+/* 输入框按内容决定方向：输入路径 / 网址时仍从左到右 */
+[dir="rtl"] input[type="text"],
+[dir="rtl"] input[type="search"],
+[dir="rtl"] input:not([type]),
+[dir="rtl"] textarea {
+  unicode-bidi: plaintext;
+  text-align: start;
+}
+
+/* 标题栏：系统窗口按钮（titleBarOverlay）始终在右侧，留位不变 */
+[dir="rtl"] .brand-tag { margin-left: 0; margin-right: 4px; }
+[dir="rtl"] .toolbar-right { margin-left: 0; margin-right: auto; }
+[dir="rtl"] .status-right { margin-left: 0; margin-right: auto; }
+
+/* 应用卡片角标 */
+[dir="rtl"] .card .badge-run { right: auto; left: 9px; }
+[dir="rtl"] .card .pin { left: auto; right: 9px; }
+
+/* 提示条放在左下角 */
+[dir="rtl"] .toast-wrap { right: auto; left: 16px; }
+
+/* 右键菜单的快捷键提示 */
+[dir="rtl"] .ctxmenu .item .k { margin-left: 0; margin-right: auto; }
+
+/* 设置：左侧导航变成右侧 */
+[dir="rtl"] .set-nav { border-right: 0; border-left: 1px solid var(--line); }
+[dir="rtl"] .set-nav-item { text-align: right; }
+[dir="rtl"] .set-search-wrap { margin-left: 0; margin-right: 14px; }
+[dir="rtl"] .modal-head .icon-btn { margin-left: 0; margin-right: auto; }
+[dir="rtl"] .modal-foot .btn { margin-left: 0; margin-right: auto; }
+
+/* 开关：滑块从右往左走 */
+[dir="rtl"] .switch::after { left: auto; right: 2px; }
+[dir="rtl"] .switch:checked::after { transform: translateX(-16px); }
+
+[dir="rtl"] .status-chip { margin-left: 0; margin-right: 2px; }
+[dir="rtl"] .setup-hv { margin-left: 0; margin-right: auto; }
+[dir="rtl"] .setup-foot .inline-note { margin-left: 0; margin-right: auto; }
+[dir="rtl"] .guide-list { padding-left: 0; padding-right: 20px; }
+[dir="rtl"] .about-ver { margin-left: 0; margin-right: 6px; }
+
+/* 折叠箭头：朝左，展开时朝下 */
+[dir="rtl"] .advanced-group > summary::before,
+[dir="rtl"] .mini-details > summary::before {
+  content: '◂';
+  margin-right: 0;
+  margin-left: 7px;
+}
+[dir="rtl"] .advanced-group[open] > summary::before,
+[dir="rtl"] .mini-details[open] > summary::before { transform: rotate(-90deg); }
+
+[dir="rtl"] .status-net::before { margin-right: 0; margin-left: 5px; }
+[dir="rtl"] .first-run-list li::before { margin-right: 0; margin-left: 8px; }
+
+/* 应用壳窗口标题栏 */
+[dir="rtl"] .bar { padding-left: 0; padding-right: 10px; }

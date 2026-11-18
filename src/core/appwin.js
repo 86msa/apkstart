@@ -1,4 +1,5 @@
 'use strict';
+const { t: __ } = require('../i18n');
 /**
  * 应用窗口：一个正在运行的安卓应用 = 一个干净的 Windows 窗口。
  *
@@ -150,7 +151,7 @@ class AppWindow {
     // 独立窗口模式下「全屏」要作用在模拟器窗口上（我们这层壳是隐藏的，
     // maximize 一个隐藏窗口没有任何视觉效果，openDetached 会读这个标记）。
     this._wantFullscreen = !!fullscreen;
-    this.state = { label: label || '应用', tip: '正在启动安卓运行时…', ready: false, landscape: false };
+    this.state = { label: label || __('应用'), tip: __('正在启动安卓运行时…'), ready: false, landscape: false };
 
     const area = this._area();
     const size = AppWindow.sizeFor(area, this.portrait, false);
@@ -184,7 +185,7 @@ class AppWindow {
       },
     });
 
-    this.win.loadFile(path.join(__dirname, '..', 'ui', 'shell.html'));
+    this.win.loadFile(path.join(__dirname, '..', 'ui', 'shell.html'), { query: { lang: require('../i18n').language } });
     // 页面标题会把窗口标题改成 shell.html 的 <title>，任务栏就认不出是哪个应用了，
     // 这里挡住，让 OS 标题一直等于应用名（任务栏悬浮提示、Alt+Tab 都靠它）。
     this.win.webContents.on('page-title-updated', (e) => {
@@ -519,7 +520,7 @@ class AppWindow {
     if (!this.isOpen) return this.state.landscape;
     const next = explicitNext === undefined || explicitNext === null
       ? !this.state.landscape : !!explicitNext;
-    this.setState({ tip: next ? '正在切换到横屏（重启安卓运行时，约 30-60 秒）…' : '正在切回竖屏（重启安卓运行时，约 30-60 秒）…', ready: false });
+    this.setState({ tip: next ? __('正在切换到横屏（重启安卓运行时，约 30-60 秒）…') : __('正在切回竖屏（重启安卓运行时，约 30-60 秒）…'), ready: false });
     if (typeof onRestart === 'function') {
       const ok = await onRestart(next).catch(() => false);
       if (ok) {

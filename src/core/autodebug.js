@@ -1,4 +1,5 @@
 'use strict';
+const { t: __ } = require('../i18n');
 /**
  * 自动检测（自动 debug）内核
  *
@@ -16,12 +17,12 @@
 
 /** 问题分类（设置页按这个顺序分组展示） */
 const CATEGORIES = [
-  { id: 'runtime', name: '运行时', hint: '安卓虚拟机进程、启动阶段、快照与残留锁' },
-  { id: 'device', name: '设备连接', hint: 'adb 授权状态、设备是否在线' },
-  { id: 'storage', name: '存储', hint: '磁盘余量、数据分区、共享目录' },
-  { id: 'settings', name: '设置', hint: '配置之间的冲突与互相抵消' },
-  { id: 'network', name: '网络', hint: '安卓网络与下载源连通性' },
-  { id: 'logs', name: '日志', hint: '运行日志里的错误' },
+  { id: 'runtime', name: __('运行时'), hint: __('安卓虚拟机进程、启动阶段、快照与残留锁') },
+  { id: 'device', name: __('设备连接'), hint: __('adb 授权状态、设备是否在线') },
+  { id: 'storage', name: __('存储'), hint: __('磁盘余量、数据分区、共享目录') },
+  { id: 'settings', name: __('设置'), hint: __('配置之间的冲突与互相抵消') },
+  { id: 'network', name: __('网络'), hint: __('安卓网络与下载源连通性') },
+  { id: 'logs', name: __('日志'), hint: __('运行日志里的错误') },
 ];
 
 const CATEGORY_IDS = CATEGORIES.map((c) => c.id);
@@ -76,8 +77,8 @@ function evaluate(obs) {
       code: 'runtime.bootFailed',
       category: 'runtime',
       severity: 'error',
-      title: '安卓运行时上次启动失败',
-      hint: '运行时的真实报错已经拿到，按这条原因处理通常一次就能恢复。',
+      title: __('安卓运行时上次启动失败'),
+      hint: __('运行时的真实报错已经拿到，按这条原因处理通常一次就能恢复。'),
       detail: bootError,
       fix: 'restartRuntime',
     });
@@ -89,9 +90,9 @@ function evaluate(obs) {
       code: 'runtime.stuckBoot',
       category: 'runtime',
       severity: 'warn',
-      title: '安卓开机卡在引导阶段',
-      hint: '已经引导超过 2 分半还没进系统。常见原因是快速启动快照损坏，重启运行时（会走一次冷启动）通常能解决。',
-      detail: `阶段：${runtime.phase}`,
+      title: __('安卓开机卡在引导阶段'),
+      hint: __('已经引导超过 2 分半还没进系统。常见原因是快速启动快照损坏，重启运行时（会走一次冷启动）通常能解决。'),
+      detail: __('阶段：{0}', runtime.phase),
       fix: 'restartRuntime',
     });
   }
@@ -102,8 +103,8 @@ function evaluate(obs) {
       code: 'runtime.staleLocks',
       category: 'runtime',
       severity: 'warn',
-      title: `检测到 ${runtime.locks} 个上次残留的锁文件`,
-      hint: '锁文件没清会让下一次启动被判定为「AVD 已被占用」而直接失败。可以一键清掉。',
+      title: __('检测到 {0} 个上次残留的锁文件', runtime.locks),
+      hint: __('锁文件没清会让下一次启动被判定为「AVD 已被占用」而直接失败。可以一键清掉。'),
       fix: 'lock',
     });
   }
@@ -115,8 +116,8 @@ function evaluate(obs) {
       code: 'runtime.orphanProcesses',
       category: 'runtime',
       severity: 'warn',
-      title: `有 ${runtime.orphans} 个残留的模拟器进程`,
-      hint: '上次没有正常关机的安卓进程还占着资源与 AVD 锁，会让下次开机失败。可以一键清理（不会动已装应用与存档）。',
+      title: __('有 {0} 个残留的模拟器进程', runtime.orphans),
+      hint: __('上次没有正常关机的安卓进程还占着资源与 AVD 锁，会让下次开机失败。可以一键清理（不会动已装应用与存档）。'),
       fix: 'orphans',
     });
   }
@@ -127,8 +128,8 @@ function evaluate(obs) {
       code: 'runtime.staleSnapshot',
       category: 'runtime',
       severity: 'warn',
-      title: '快速启动快照已损坏',
-      hint: '快照文件还在但校验不通过，每次开机都要额外冷启动一次。删掉它会用一次冷启动换回磁盘空间。',
+      title: __('快速启动快照已损坏'),
+      hint: __('快照文件还在但校验不通过，每次开机都要额外冷启动一次。删掉它会用一次冷启动换回磁盘空间。'),
       fix: 'snapshots',
     });
   }
@@ -141,8 +142,8 @@ function evaluate(obs) {
       code: 'device.unauthorized',
       category: 'device',
       severity: 'error',
-      title: '安卓设备未授权调试',
-      hint: '安卓侧弹过「允许 USB 调试吗」但没被确认，adb 一直连不上。重启运行时（走一次冷启动）会重新弹出确认框，确认后即恢复。',
+      title: __('安卓设备未授权调试'),
+      hint: __('安卓侧弹过「允许 USB 调试吗」但没被确认，adb 一直连不上。重启运行时（走一次冷启动）会重新弹出确认框，确认后即恢复。'),
       fix: 'restartRuntime',
     });
   } else if (device.state === 'offline') {
@@ -150,8 +151,8 @@ function evaluate(obs) {
       code: 'device.offline',
       category: 'device',
       severity: 'warn',
-      title: '安卓设备处于 offline 状态',
-      hint: 'adb 能看到设备但连不上，通常是虚拟机还在引导或 adb 服务没握手成功。等一会儿仍不恢复就重启运行时。',
+      title: __('安卓设备处于 offline 状态'),
+      hint: __('adb 能看到设备但连不上，通常是虚拟机还在引导或 adb 服务没握手成功。等一会儿仍不恢复就重启运行时。'),
       fix: 'restartRuntime',
     });
   } else if (runtime.running && device.checked && device.state === 'no-device') {
@@ -159,8 +160,8 @@ function evaluate(obs) {
       code: 'device.missing',
       category: 'device',
       severity: 'warn',
-      title: '运行时在跑，但 adb 没看到设备',
-      hint: '安卓进程活着、adb 却看不到设备，多半是 adb 服务端口被别的程序占了，或者引导还没完成。',
+      title: __('运行时在跑，但 adb 没看到设备'),
+      hint: __('安卓进程活着、adb 却看不到设备，多半是 adb 服务端口被别的程序占了，或者引导还没完成。'),
       fix: 'restartRuntime',
     });
   }
@@ -173,9 +174,9 @@ function evaluate(obs) {
       code: 'storage.diskCritical',
       category: 'storage',
       severity: 'error',
-      title: '运行时所在磁盘快满了',
-      hint: '剩余空间不足 2 GB，装应用和写快照都会失败。点「一键清理」回收旧镜像、旧快照和日志。',
-      detail: `剩余 ${freeMB} MB`,
+      title: __('运行时所在磁盘快满了'),
+      hint: __('剩余空间不足 2 GB，装应用和写快照都会失败。点「一键清理」回收旧镜像、旧快照和日志。'),
+      detail: __('剩余 {0} MB', freeMB),
       fix: 'disk',
     });
   } else if (freeMB > 0 && freeMB < 8192) {
@@ -183,9 +184,9 @@ function evaluate(obs) {
       code: 'storage.diskLow',
       category: 'storage',
       severity: 'warn',
-      title: '运行时所在磁盘空间偏紧',
-      hint: '剩余不足 8 GB，快照和系统镜像还需要空间。建议先清理一次可回收文件。',
-      detail: `剩余 ${freeMB} MB`,
+      title: __('运行时所在磁盘空间偏紧'),
+      hint: __('剩余不足 8 GB，快照和系统镜像还需要空间。建议先清理一次可回收文件。'),
+      detail: __('剩余 {0} MB', freeMB),
       fix: 'disk',
     });
   }
@@ -196,9 +197,9 @@ function evaluate(obs) {
       code: 'storage.dataNeedsReset',
       category: 'storage',
       severity: 'warn',
-      title: '数据分区扩容没有真正生效',
-      hint: '快速启动用的差量盘挡着就地扩容，guest 里看到的还是旧容量。需要「重置安卓数据」后按新容量重建（会清掉已装应用）。',
-      detail: `配置 ${storage.configuredGB} GB · 实际 ${storage.actualGB} GB`,
+      title: __('数据分区扩容没有真正生效'),
+      hint: __('快速启动用的差量盘挡着就地扩容，guest 里看到的还是旧容量。需要「重置安卓数据」后按新容量重建（会清掉已装应用）。'),
+      detail: __('配置 {0} GB · 实际 {1} GB', storage.configuredGB, storage.actualGB),
       fix: 'dataReset',
     });
   } else if (Number(storage.configuredGB) > 0 && Number(storage.actualGB) > 0
@@ -207,9 +208,9 @@ function evaluate(obs) {
       code: 'storage.dataMismatch',
       category: 'storage',
       severity: 'error',
-      title: '安卓数据分区比配置的小',
-      hint: '安卓里实际可用容量小于设置里写的值，装大游戏会提示存储空间不足。',
-      detail: `配置 ${storage.configuredGB} GB · 实际 ${storage.actualGB} GB`,
+      title: __('安卓数据分区比配置的小'),
+      hint: __('安卓里实际可用容量小于设置里写的值，装大游戏会提示存储空间不足。'),
+      detail: __('配置 {0} GB · 实际 {1} GB', storage.configuredGB, storage.actualGB),
       fix: 'dataReset',
     });
   }
@@ -219,8 +220,8 @@ function evaluate(obs) {
       code: 'storage.sharedBroken',
       category: 'storage',
       severity: 'warn',
-      title: '共享目录不可用',
-      hint: '文件互通用的本机目录不存在或没有写权限，安卓里保存的文件同步不过去。',
+      title: __('共享目录不可用'),
+      hint: __('文件互通用的本机目录不存在或没有写权限，安卓里保存的文件同步不过去。'),
       detail: storage.sharedPath || '',
       fix: 'shared',
     });
@@ -235,8 +236,8 @@ function evaluate(obs) {
       code: 'settings.orientationConflict',
       category: 'settings',
       severity: 'warn',
-      title: '屏幕方向策略与当前面板方向相反',
-      hint: '策略要求竖屏，但面板现在是横屏，安卓只会给应用一条窄画面加两侧黑边。把面板方向改成与策略一致即可。',
+      title: __('屏幕方向策略与当前面板方向相反'),
+      hint: __('策略要求竖屏，但面板现在是横屏，安卓只会给应用一条窄画面加两侧黑边。把面板方向改成与策略一致即可。'),
       fix: 'orientation',
     });
   } else if (mode === 'landscape' && settings.landscape === false) {
@@ -244,8 +245,8 @@ function evaluate(obs) {
       code: 'settings.orientationConflict',
       category: 'settings',
       severity: 'warn',
-      title: '屏幕方向策略与当前面板方向相反',
-      hint: '策略要求横屏，但面板现在是竖屏，看剧/游戏会是一条竖着的窄画面。把面板方向改成与策略一致即可。',
+      title: __('屏幕方向策略与当前面板方向相反'),
+      hint: __('策略要求横屏，但面板现在是竖屏，看剧/游戏会是一条竖着的窄画面。把面板方向改成与策略一致即可。'),
       fix: 'orientation',
     });
   }
@@ -255,8 +256,8 @@ function evaluate(obs) {
       code: 'settings.detachedFullscreen',
       category: 'settings',
       severity: 'info',
-      title: '原生窗口模式下的「启动时自动全屏」不会生效',
-      hint: '原生窗口由模拟器自己开窗，全屏由它自己决定，不受这里的开关控制。想铺满屏幕可在窗口里按 F11，或把窗口承载方式改成嵌入模式。',
+      title: __('原生窗口模式下的「启动时自动全屏」不会生效'),
+      hint: __('原生窗口由模拟器自己开窗，全屏由它自己决定，不受这里的开关控制。想铺满屏幕可在窗口里按 F11，或把窗口承载方式改成嵌入模式。'),
     });
   }
 
@@ -265,8 +266,8 @@ function evaluate(obs) {
       code: 'settings.snapshotOffLowDisk',
       category: 'settings',
       severity: 'info',
-      title: '磁盘偏紧，快速启动快照已关闭',
-      hint: '当前磁盘余量不到 4 GB，快照又被关掉：打开应用会走一次完整冷启动（十几秒）。磁盘够的话建议重新打开快照。',
+      title: __('磁盘偏紧，快速启动快照已关闭'),
+      hint: __('当前磁盘余量不到 4 GB，快照又被关掉：打开应用会走一次完整冷启动（十几秒）。磁盘够的话建议重新打开快照。'),
       fix: 'settings',
     });
   }
@@ -278,8 +279,8 @@ function evaluate(obs) {
       code: 'network.guestDown',
       category: 'network',
       severity: 'warn',
-      title: '安卓里没有网络',
-      hint: '安卓侧解析或联网失败，视频/资讯类应用会一直转圈。可以用「修复网络」重置安卓数据解决（应用清单会保留）。',
+      title: __('安卓里没有网络'),
+      hint: __('安卓侧解析或联网失败，视频/资讯类应用会一直转圈。可以用「修复网络」重置安卓数据解决（应用清单会保留）。'),
       detail: network.reason || '',
       fix: 'repairNetwork',
     });
@@ -291,9 +292,9 @@ function evaluate(obs) {
       code: 'network.sourcesDown',
       category: 'network',
       severity: 'warn',
-      title: `${badSources.length} 个下载源连不上`,
-      hint: '更新检查会同时问多个源，有一个不通不影响使用；如果全都不通，请检查网络或代理。',
-      detail: badSources.map((s) => s.name).join('、'),
+      title: __('{0} 个下载源连不上', badSources.length),
+      hint: __('更新检查会同时问多个源，有一个不通不影响使用；如果全都不通，请检查网络或代理。'),
+      detail: badSources.map((s) => s.name).join(__('、')),
       fix: 'settings',
     });
   }
@@ -306,8 +307,8 @@ function evaluate(obs) {
       code: 'logs.errors',
       category: 'logs',
       severity: 'warn',
-      title: `运行日志里有 ${errLines.length} 条错误`,
-      hint: '最近一次运行留下了错误记录，展开诊断报告可以看到完整上下文。',
+      title: __('运行日志里有 {0} 条错误', errLines.length),
+      hint: __('最近一次运行留下了错误记录，展开诊断报告可以看到完整上下文。'),
       detail: errLines.slice(-1)[0],
       fix: 'report',
     });
@@ -320,8 +321,8 @@ function evaluate(obs) {
       code: 'accel.softwareEmulation',
       category: 'runtime',
       severity: 'warn',
-      title: '当前没有硬件加速',
-      hint: '只能跑纯软件模拟，开机慢到几分钟、画面也容易掉帧。开启「Windows 虚拟机监控程序平台」后重启即可。',
+      title: __('当前没有硬件加速'),
+      hint: __('只能跑纯软件模拟，开机慢到几分钟、画面也容易掉帧。开启「Windows 虚拟机监控程序平台」后重启即可。'),
       detail: accel.note || '',
       fix: 'virtualization',
     });

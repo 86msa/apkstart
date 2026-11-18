@@ -1,4 +1,5 @@
 'use strict';
+const { t: __ } = require('../i18n');
 /**
  * 应用级容器（纯计算层）
  *
@@ -151,9 +152,9 @@ function nextSessionState(active, event, pkg) {
 /** 给日志/诊断用的一行摘要 */
 function describeSession(state, plan) {
   const n = state.active.length;
-  if (!n) return '容器空闲（Android 常驻但已降优先级，0 个应用进程）';
-  return `容器活跃：${n} 个应用窗口${plan && plan.stopped && plan.stopped.length
-    ? `，已停掉 ${plan.stopped.length} 个后台应用` : ''}`;
+  if (!n) return __('容器空闲（Android 常驻但已降优先级，0 个应用进程）');
+  return __('容器活跃：{0} 个应用窗口{1}', n, plan && plan.stopped && plan.stopped.length
+    ? __('，已停掉 {0} 个后台应用', plan.stopped.length) : '');
 }
 
 /**

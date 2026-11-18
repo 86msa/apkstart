@@ -62,8 +62,10 @@ copy(ELECTRON_DIST, OUT);
 fs.rmSync(path.join(OUT, 'resources', 'default_app.asar'), { force: true });
 
 // 1.1 语言包瘦身：Electron 自带 55 种语言，合计 41MB，我们只用中文界面。
-//     只留 zh-CN / zh-TW / en-US，其余删掉（-39MB，等于整包小 15%）。
-const KEEP_LOCALES = new Set(['zh-CN.pak', 'zh-TW.pak', 'en-US.pak']);
+//     只留 zh-CN / zh-TW / en-US / ar，其余删掉（-39MB，等于整包小 15%）。
+//     ar.pak 必须留：没有它 app.getLocale() 在阿拉伯语 Windows 上会退回 en-US，
+//     「跟随系统」就认不出阿拉伯语。
+const KEEP_LOCALES = new Set(['zh-CN.pak', 'zh-TW.pak', 'en-US.pak', 'ar.pak']);
 let localeSaved = 0;
 try {
   const locDir = path.join(OUT, 'locales');

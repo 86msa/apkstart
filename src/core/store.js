@@ -35,6 +35,11 @@ const APPS_FILE = path.join(DATA_DIR, 'apps.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 
 const DEFAULT_SETTINGS = {
+  /**
+   * 界面语言：'auto' = 跟随 Windows 系统语言（阿拉伯语系统自动用 العربية），
+   * 也可以固定成 'zh-CN' / 'ar'。见 src/i18n。
+   */
+  uiLanguage: 'auto',
   adbPath: '',
   device: '127.0.0.1:5555',
   /**
