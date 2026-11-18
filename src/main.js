@@ -472,13 +472,14 @@ async function restartForOrientation(landscape, { reloadApp = true } = {}) {
 
 /**
  * 把安卓画面接到用户眼前。两种模式：
- *   - 嵌入（默认）：SetParent 进我们自己的窗口，观感统一；
- *   - 独立窗口：让模拟器开原生窗口，绕开嵌入固有的一整串问题
- *     （黑边、坐标错位、铺不满、Qt 面板方向打架）。由设置 display.windowEmbed 控制。
+ *   - 原生窗口（默认）：让模拟器开自己的窗口，方向、缩放、输入都由它自己管，
+ *     不存在嵌入方式固有的黑边、坐标错位、铺不满、掉帧；
+ *   - 嵌入：SetParent 进我们自己的窗口，观感统一、标题栏带旋转按钮。
+ *   由设置 display.windowEmbed 控制（true 才是嵌入）。
  */
 async function attachAppWindow() {
   if (!appWin || !appWin.isOpen) return false;
-  const embedMode = displaySettings().windowEmbed !== false;
+  const embedMode = displaySettings().windowEmbed === true;
   if (!embedMode) {
     // 独立窗口不需要标题栏里那块区域了，直接让模拟器窗口自己露出来
     return appWin.openDetached().catch(() => false);
@@ -2895,6 +2896,14 @@ if (!gotLock) {
     // F11 全屏 / 窗口切换；全局快捷键只在 ApkStart 活着时有效
     try {
       globalShortcut.register('F11', () => { toggleDisplayMode(); });
+    } catch (_) { /* ignore */ }
+    // 旋转快捷键：原生窗口模式下壳窗口是隐藏的，标题栏里的 Ctrl+R 收不到焦点，
+    // 所以再注册一个全局组合键。用 Ctrl+Alt+R 而不是 Ctrl+R —— 后者会和
+    // 浏览器/编辑器的「刷新」抢键，全局注册会直接废掉用户其它程序的刷新。
+    try {
+      globalShortcut.register('CommandOrControl+Alt+R', () => {
+        if (currentAppPkg) rotateCurrentApp().catch(() => {});
+      });
     } catch (_) { /* ignore */ }
 
     const args = parseArgs(process.argv);

@@ -255,8 +255,8 @@ function evaluate(obs) {
       code: 'settings.detachedFullscreen',
       category: 'settings',
       severity: 'info',
-      title: '独立窗口模式下的「自动全屏」不会生效',
-      hint: '独立窗口由模拟器自己开窗口，全屏由它自己决定，不受这里的开关控制。需要铺满屏幕请在窗口里按 F11。',
+      title: '原生窗口模式下的「启动时自动全屏」不会生效',
+      hint: '原生窗口由模拟器自己开窗，全屏由它自己决定，不受这里的开关控制。想铺满屏幕可在窗口里按 F11，或把窗口承载方式改成嵌入模式。',
     });
   }
 

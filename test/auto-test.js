@@ -2611,15 +2611,30 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(/accelerometer_rotation \$\{guestAutoRotate\(\)\}/.test(adbJs), 'adb 要用 guestAutoRotate 值');
   });
 
-  await test('窗口模式：默认回到嵌入窗口，两种模式可在设置里切换，且只迁移一次', () => {
+  await test('窗口模式：默认原生窗口，两种模式可在设置里切换，且只迁移一次', () => {
     const root = path.join(__dirname, '..');
     const storeJs = fs.readFileSync(path.join(root, 'src', 'core', 'store.js'), 'utf8');
-    assert(/windowEmbed:\s*true/.test(storeJs), '默认嵌入窗口');
-    // 一次性迁移：用 windowEmbedMigrated 标记，避免用户主动选了独立窗口后又被扳回来
-    assert(/windowEmbedMigrated/.test(storeJs), '要有一次性迁移标记');
-    assert(/raw\.display\.windowEmbed === false/.test(storeJs), '只对旧用户的 false 做迁移');
+    // 0.6.0：嵌入模式（SetParent）缩放/旋转时掉帧且有黑边、坐标错位，
+    // 默认改为让模拟器开自己的原生窗口。
+    assert(/windowEmbed:\s*false,\s*\n\s*\/\/ 镜像内/.test(storeJs), 'defaultSettings.display.windowEmbed 必须是 false');
+    // 一次性迁移：只迁「没主动选过」的配置，用户自己选的不能被反复扳回来
+    assert(/windowEmbedMigrated2/.test(storeJs), '要有一次性迁移标记');
+    assert(/windowEmbedChosen !== true/.test(storeJs), '主动选过的配置不迁移');
+    const appJs = fs.readFileSync(path.join(root, 'src', 'ui', 'app.js'), 'utf8');
+    assert(/windowEmbedChosen:\s*true/.test(appJs), '设置页切换时要写入「已主动选择」标记');
     const indexHtml = fs.readFileSync(path.join(root, 'src', 'ui', 'index.html'), 'utf8');
     assert(/setWindowEmbed/.test(indexHtml), '设置里要有窗口模式切换入口');
+    // 原生窗口排在第一个选项，用户进设置第一眼看到的就是默认值
+    const sel = indexHtml.slice(indexHtml.indexOf('id="setWindowEmbed"'), indexHtml.indexOf('id="setWindowEmbed"') + 400);
+    assert(sel.indexOf('value="detached"') < sel.indexOf('value="embed"'), '原生窗口应为默认选项（排在前面）');
+  });
+
+  await test('窗口模式：探针与自动检测按新默认值判定', () => {
+    const root = path.join(__dirname, '..');
+    const probeJs = fs.readFileSync(path.join(root, 'src', 'core', 'autodebug-probe.js'), 'utf8');
+    // 只有显式 true 才算嵌入模式，未设置时按原生窗口处理
+    assert(/windowEmbed:\s*!!\(settings\.display && settings\.display\.windowEmbed === true\)/.test(probeJs),
+      '探针要按「显式 true 才算嵌入」判定');
   });
 
   await test('加载速度：网络状态新鲜缓存快速复用，运行时停止即作废', () => {

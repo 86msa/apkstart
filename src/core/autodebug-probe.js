@@ -118,7 +118,8 @@ async function collect(ctx) {
   obs.settings = {
     orientationMode: (settings.display && settings.display.orientationMode) || 'auto',
     landscape: !!(settings.display && settings.display.landscape),
-    windowEmbed: !(settings.display && settings.display.windowEmbed === false),
+    // 0.6.0 起默认原生窗口：只有显式 true 才算嵌入模式
+    windowEmbed: !!(settings.display && settings.display.windowEmbed === true),
     autoFullscreen: !!(settings.display && settings.display.autoFullscreenOnLaunch),
     keepSnapshot: !(settings.engine && settings.engine.keepSnapshot === false),
     resourceMode: (settings.engine && settings.engine.resourceMode) || '',

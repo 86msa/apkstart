@@ -1064,7 +1064,8 @@ function fillSettings(s) {
   if ($('setAutoRotate')) $('setAutoRotate').value = d.autoRotate === false ? 'off' : 'on';
   if ($('setTabletMode')) $('setTabletMode').value = d.tabletMode === false ? 'off' : 'on';
   $('setPortrait').value = d.portrait || '900x1600';
-  if ($('setWindowEmbed')) $('setWindowEmbed').value = d.windowEmbed === false ? 'detached' : 'embed';
+  // 0.6.0 起默认原生窗口：只有显式 true 才是嵌入模式（旧配置里 undefined 视为原生）
+  if ($('setWindowEmbed')) $('setWindowEmbed').value = d.windowEmbed === true ? 'embed' : 'detached';
   $('portraitField').hidden = $('setDisplayMode').value === 'fullscreen';
 }
 
@@ -1838,10 +1839,15 @@ function bindSettings() {
   });
   $('setWindowEmbed').addEventListener('change', async (e) => {
     const embed = e.target.value === 'embed';
-    state.settings = await api.setSettings({ display: { windowEmbed: embed } });
+    // windowEmbedChosen 标记「用户自己选过」：之后升级不会再被默认值迁移覆盖。
+    state.settings = await api.setSettings({
+      display: { windowEmbed: embed, windowEmbedChosen: true },
+    });
     toast({
-      title: embed ? '已切回嵌入模式' : '已切到独立窗口模式',
-      body: '下次打开应用时生效。独立模式下安卓画面由模拟器自己开窗口，方向与缩放都由它处理。',
+      title: embed ? '已切回嵌入模式' : '已切到原生窗口',
+      body: embed
+        ? '下次打开应用时生效。嵌入模式观感统一、标题栏带旋转按钮，但缩放/旋转时更容易掉帧或出现黑边。'
+        : '下次打开应用时生效。原生窗口由模拟器自己渲染与排布，帧率和缩放更稳，横屏可用托盘菜单或 Ctrl+Alt+R。',
       type: 'ok',
     });
   });

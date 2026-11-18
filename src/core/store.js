@@ -183,13 +183,15 @@ const DEFAULT_SETTINGS = {
     // 越过 Android 的平板断点）。红果短剧这类应用只有在平板排版下才有双列剧集页，
     // 也是用户要的「平板模式」。关掉就回到镜像默认密度（手机排版）。
     tabletMode: true,
-    // 窗口承载方式：true=把安卓画面嵌进 ApkStart 自己的窗口（观感统一，
-    // 标题栏带旋转/最小化/最大化/关闭按钮）；
-    // false=让模拟器开自己的原生 Qt 窗口（绕开嵌入固有的黑边/坐标错位/铺不满问题，
-    // 但原生窗口没有我们的旋转按钮，横屏只能走托盘菜单）。
-    // 0.5.9 起默认回到嵌入模式：用户要「之前那个好看、带旋转按钮的窗口」。
+    // 窗口承载方式：false=让模拟器开自己的原生窗口（Qt 直接渲染，方向/缩放/输入
+    // 全由它自己管，帧率和拖动都跟手）；
+    // true=把安卓画面用 SetParent 塞进 ApkStart 的壳窗口（观感统一，标题栏带
+    // 旋转/最小化/最大化/关闭按钮）。
+    // 0.6.0 起默认原生窗口：嵌入模式要把别人的窗口重新布局进自己客户区，
+    // 在缩放、旋转、切换应用时会掉帧，还常伴随黑边/坐标错位/铺不满 ——
+    // 这类问题在嵌入方式下无法根治，原生窗口从根上绕开。
     // 两种模式仍然都能在设置里选（display.windowEmbed）。
-    windowEmbed: true,
+    windowEmbed: false,
     // 镜像内「自动旋转」开关：默认打开（写 guest 的 accelerometer_rotation=1），
     // 面板方向仍由 wm user-rotation lock + set-ignore-orientation-request 决定，
     // 不会被传感器带歪。关掉可回到旧的强制锁定行为。
@@ -283,20 +285,29 @@ const store = {
     s.freeform = false;
 
     /**
-     * 0.5.9 一次性迁移：把旧配置里被设成独立窗口（原生 Qt 窗口）的用户
-     * 带回嵌入模式 —— 那才是「好看、标题栏带旋转按钮」的窗口。
-     * 关键：只迁移一次（写 disk 标记）。迁移后用户再主动选独立窗口，
-     * 我们要尊重，不能每次启动都又把它扳回来。
-     * 用户数据文件里没有 windowEmbedMigrated 标记时读盘得到 undefined → 执行迁移。
+     * 0.6.0 一次性迁移：把「嵌入窗口」带回原生窗口。
+     *
+     * 0.5.9 曾把所有人强制迁到嵌入模式，结果嵌入方式（SetParent + 反复
+     * SetWindowPos 重排别人的窗口）在缩放/旋转/切应用时掉帧，并伴随黑边、
+     * 坐标错位、铺不满，是用户反馈最集中的一类问题。原生窗口由模拟器自己
+     * 渲染和排布，这些问题不存在，所以默认改回它。
+     *
+     * 只迁移「没在设置里主动选过」的配置（windowEmbedChosen 由设置页写入）：
+     * 迁移后用户再手动切回嵌入模式，我们尊重，不再每次启动扳回来。
      */
     try {
       const raw = readJson(SETTINGS_FILE, {});
-      if (raw && raw.display && raw.display.windowEmbed === false
-          && !(raw.display && raw.display.windowEmbedMigrated)) {
-        s.display.windowEmbed = true;
-        s.display.windowEmbedMigrated = true;
-        // 立刻回写标记，保证只迁一次；把用户自己的其它字段原样保留。
-        const migrated = { ...raw, display: { ...raw.display, windowEmbed: true, windowEmbedMigrated: true } };
+      const d = raw && raw.display;
+      if (d && d.windowEmbed !== false
+          && !d.windowEmbedMigrated2
+          && d.windowEmbedChosen !== true) {
+        s.display.windowEmbed = false;
+        s.display.windowEmbedMigrated2 = true;
+        // 立刻回写，保证只迁一次；用户其它字段原样保留。
+        const migrated = {
+          ...raw,
+          display: { ...d, windowEmbed: false, windowEmbedMigrated2: true },
+        };
         writeJson(SETTINGS_FILE, migrated);
       }
     } catch (_) { /* 迁移失败不影响启动，保持读到的值 */ }
