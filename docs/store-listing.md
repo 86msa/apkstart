@@ -1,4 +1,4 @@
-# Microsoft Store 提交材料（ApkStart 0.5.8）
+# Microsoft Store 提交材料（ApkStart 0.5.9）
 
 > 这份文件是给 Partner Center 表单直接复制用的。包体、图标、清单由脚本产出，
 > 只有「注册账号 → 预留名称 → 上传 → 送审」必须在网页上人工完成。
@@ -12,7 +12,7 @@
 | Product name | `ApkStart` |
 | Category | Developer tools → Utilities & tools（备选：Productivity） |
 | Price | Free |
-| Package | `dist/store/ApkStart_0.5.8.0_x64.msix`（x64，约 850 MB） |
+| Package | `dist/store/ApkStart_0.5.9.0_x64.msix`（x64，约 850 MB） |
 | 支持语言 | 简体中文 / English (United States) |
 | 官网 | https://github.com/RoutineMiku/apkstart |
 | 支持邮箱 | <!-- 填你的邮箱 --> |
@@ -22,7 +22,13 @@
 
 **中文**
 ```
-0.5.8：
+0.5.9：
+· 修复红果免费短剧等应用无法横屏：标题栏旋转、托盘菜单、Ctrl+R 现在统一走同一套方向决策，横屏覆盖优先于应用自带的方向声明。
+· 镜像里的「自动旋转」开关默认打开，可在设置里关闭；画面方向仍由屏幕方向策略决定，不会被传感器带歪。
+· 默认回到带旋转按钮的嵌入窗口（更好看的自定义标题栏），可在设置里随时切回模拟器原生独立窗口，两种模式都保留。
+· 启动提速：热启动和旋转重启时复用新鲜的网络状态，减少重复的 adb 网络探测往返。
+
+0.5.8（已包含）：
 · 新增「本机体检 · 自动配置」：自动检查 CPU 虚拟化是否开启、Windows 虚拟机监控程序平台是否启用、显卡与显存、内存和系统版本。
 · 能自动改的直接生效：按本机硬件推荐内存、CPU 核心数、画质与渲染后端，并把这台机器的配置固化成一份驱动。
 · 需要管理员权限的操作（开启 Windows 功能、安装加速驱动）提供一键按钮；只能进 BIOS 改的会给出明确步骤。
@@ -71,7 +77,13 @@
 
 **English**
 ```
-0.5.8:
+0.5.9:
+· Fixed landscape mode for 红果 (Fanqie) short-video app and similar: the title-bar rotate button, tray menu and Ctrl+R now share one orientation decision; per-app landscape override takes priority over the app's own declared orientation.
+· The in-image "auto-rotate" switch is now on by default and can be turned off in Settings; screen orientation is still decided by the orientation policy, never by the sensor.
+· Restored the nicer embedded window with the custom title bar and rotate button as the default; you can switch back to the emulator's native standalone window anytime in Settings — both modes remain available.
+· Faster startup: hot launches and rotation restarts reuse fresh network state, cutting repeated adb network probes.
+
+0.5.8 (included):
 · New "PC check-up · auto-config": detects whether CPU virtualization is enabled, whether the Windows Hypervisor Platform is on, plus GPU/VRAM, memory and OS build.
 · Everything that can be automated is applied: memory, CPU cores, render resolution and render path are tuned for this PC, and the result is saved as a driver for future launches.
 · Actions that need administrator rights (enabling Windows features, installing the acceleration driver) get a one-click button; BIOS-only changes come with exact steps.
@@ -323,7 +335,7 @@ Notes:
    ```powershell
    node build/msix.js --identity "<Identity/Name>" --publisher "<Identity/Publisher>"
    ```
-4. **Packages** → 上传 `dist/store/ApkStart_0.5.8.0_x64.msix`，等待校验通过。
+4. **Packages** → 上传 `dist/store/ApkStart_0.5.9.0_x64.msix`，等待校验通过。
 5. **Store listing** → 填第 2–5 节的内容、上传截图、选分类。
 6. **Pricing and availability** → Free，市场选中国 + 全球。
 7. **Submission options** → 粘贴第 6 节的 certification notes。

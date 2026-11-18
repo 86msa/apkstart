@@ -13,6 +13,7 @@ const { Installer } = require('./core/installer');
 const { Sharer } = require('./core/sharer');
 const { parseApk } = require('./core/apk');
 const { drawAppIcon } = require('./core/png');
+const orientation = require('./core/orientation');
 
 // 品牌 Logo（build/render-logo.js 生成）；缺失时回退到程序化绘制的旧版图标
 const LOGO_DIR = path.join(__dirname, 'ui', 'assets');
@@ -332,17 +333,40 @@ function setAumid(id) {
  */
 function wantLandscapeFor(pkg) {
   const ds = displaySettings();
-  const mode = ds.orientationMode || 'auto';
-  if (mode === 'landscape') return true;
-  if (mode === 'portrait') return false;
   const app = pkg ? store.getApp(pkg) : null;
-  const override = app && app.orientationOverride;
-  if (override === 'landscape') return true;
-  if (override === 'portrait') return false;
-  const natural = app && app.orientation;
-  if (natural === 'landscape') return true;
-  if (natural === 'portrait') return false;
-  return !!ds.landscape;
+  return orientation.resolveLandscape({
+    mode: ds.orientationMode || 'auto',
+    orientation: app && app.orientation,
+    orientationOverride: app && app.orientationOverride,
+    panelLandscape: !!ds.landscape,
+  });
+}
+
+/**
+ * 旋转当前应用的统一入口：算一次目标方向 → 写 per-app 覆盖 → 重启面板。
+ *
+ * 以前标题栏按钮、托盘菜单、Ctrl+R 各算各的「下一个方向」，基准还不一致
+ * （一个看 display.landscape，一个看 appWin.state.landscape）。点一下旋转，
+ * 写进 apps.json 的覆盖值和真正切过去的面板方向可能正好相反，下次启动
+ * wantLandscapeFor 又把它翻回去 —— 这就是「红果怎么都横不过来」的根因。
+ * 现在一律以 wantLandscapeFor(pkg) 为唯一基准，取反后同时写覆盖 + 切面板。
+ */
+async function rotateCurrentApp() {
+  const pkg = appWin && appWin.pkg;
+  const current = pkg ? wantLandscapeFor(pkg) : !!displaySettings().landscape;
+  const next = orientation.flipLandscape(current);
+  if (pkg) {
+    store.upsertApp({ package: pkg, orientationOverride: orientation.overrideValue(next) });
+    appLog(`orientation override ${pkg} = ${orientation.overrideValue(next)}`);
+  }
+  // appWin.rotate 负责更新标题栏状态与贴合窗口；传入统一的 next 作为目标方向，
+  // 由它内部调用 restartForOrientation 完成面板切换（只重启一次）。
+  if (appWin && appWin.isOpen) {
+    await appWin.rotate((want) => restartForOrientation(want, { reloadApp: false }), next).catch(() => {});
+  } else {
+    await restartForOrientation(next, { reloadApp: false }).catch(() => {});
+  }
+  return { ok: true, landscape: next };
 }
 
 /**
@@ -825,9 +849,9 @@ function buildTray() {
         },
       },
       {
-        label: displaySettings().landscape ? '切回竖屏（需重启运行时）' : '切换横屏（需重启运行时）',
+        label: wantLandscapeFor(currentAppPkg) ? '切回竖屏（需重启运行时）' : '切换横屏（需重启运行时）',
         enabled: !!currentAppPkg,
-        click: () => { restartForOrientation(!displaySettings().landscape).catch(() => {}); },
+        click: () => { rotateCurrentApp().catch(() => {}); },
       },
       {
         label: displaySettings().mode === 'fullscreen' ? '切回竖屏窗口' : '全屏（自适应屏幕）',
@@ -1346,6 +1370,22 @@ function registerIpc() {
   ipcMain.handle('app:pin', async (_e, { pkg, pinned }) => {
     store.upsertApp({ package: pkg, pinned: !!pinned });
     return { ok: true };
+  });
+
+  /**
+   * 单个应用的横竖屏覆盖（应用卡片右键菜单用）。
+   * 只写 apps.json 的 orientationOverride，不在这里重启运行时 ——
+   * 下次打开该应用时 wantLandscapeFor 会读它并把面板切到对应方向。
+   * 传 null 表示清除覆盖，回到 APK 清单解析出的天然方向。
+   */
+  ipcMain.handle('app:setOrientation', async (_e, { pkg, orientation: value }) => {
+    if (!pkg) return { ok: false, error: '缺少包名' };
+    const next = value === 'landscape' || value === 'portrait' ? value : null;
+    store.upsertApp({ package: pkg, orientationOverride: next });
+    appLog(`orientation override ${pkg} = ${next || '(跟随应用)'}`);
+    // 主界面列表要立刻显示新的方向文字
+    send('apps:changed');
+    return { ok: true, orientation: next, landscape: wantLandscapeFor(pkg) };
   });
 
   ipcMain.handle('app:revealApk', async (_e, pkg) => {
@@ -2332,20 +2372,12 @@ function registerIpc() {
     return { ok: false };
   });
   // 标题栏的旋转按钮 = 「这个应用我要横着/竖着用」。
-  // 以前它只是把全局 landscape 翻一下，于是点红果的旋转按钮会把**所有**应用
-  // 都带到横屏面板上去，红果自己反而被信箱化。现在写成该应用自己的覆盖值，
-  // 别的应用不受影响（设置里的「强制」模式仍然优先）。
-  ipcMain.handle('shell:rotate', () => {
-    const pkg = appWin && appWin.pkg;
-    // 以「面板实际方向」为基准取反，而不是 appWin.state.landscape
-    //（后者是「期望方向」，在启动切换面板的过程中可能还没落地）。
-    const next = !displaySettings().landscape;
-    if (pkg) {
-      store.upsertApp({ package: pkg, orientationOverride: next ? 'landscape' : 'portrait' });
-      appLog(`orientation override ${pkg} = ${next ? 'landscape' : 'portrait'}`);
-    }
-    return appWin.rotate(restartForOrientation);
-  });
+  // 统一走 rotateCurrentApp：以 wantLandscapeFor(pkg) 为唯一基准算目标方向，
+  // 一次算出 next 后同时写 per-app 覆盖 + 切物理面板。以前这里和 appWin.rotate
+  // 各算各的（一个看 display.landscape，一个看 state.landscape），两个值可能
+  // 相反，于是「点了旋转 → 覆盖写成横屏 → 面板却切回竖屏 → 下次又被翻回竖屏」，
+  // 红果这类应用就怎么都横不过来。
+  ipcMain.handle('shell:rotate', () => rotateCurrentApp());
 
   ipcMain.handle('shell:back', async () => { await runtime.client().keyBack(); });
   ipcMain.handle('shell:forward', async () => { await runtime.client().keyForward(); });

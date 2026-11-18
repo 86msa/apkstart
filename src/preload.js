@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('apkstart', {
   createShortcut: (pkg) => invoke('app:shortcut', pkg),
   clearData: (pkg) => invoke('app:clearData', pkg),
   pin: (pkg, pinned) => invoke('app:pin', { pkg, pinned }),
+  setAppOrientation: (pkg, orientation) => invoke('app:setOrientation', { pkg, orientation }),
   revealApk: (pkg) => invoke('app:revealApk', pkg),
   revealApkDir: () => invoke('apk:reveal'),
   openDir: () => invoke('dialog:openDir'),

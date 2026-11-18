@@ -9,6 +9,17 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const store = require('./store');
+const { autoRotateSetting } = require('./orientation');
+
+/**
+ * 镜像内「自动旋转」开关要写进 guest 的值（'1' 开 / '0' 关）。
+ * 面板方向不由它决定 —— setOrientation / resetDisplayOverrides 里紧跟的
+ * `wm user-rotation lock 0` + `wm set-ignore-orientation-request` 才是方向权威。
+ * 这里只是让系统设置里的开关显示为「开」，满足应用读取该 setting 的期望。
+ */
+function guestAutoRotate() {
+  try { return autoRotateSetting(store.getSettings()); } catch (_) { return '1'; }
+}
 
 /**
  * 平板排版的逻辑密度。
@@ -921,8 +932,11 @@ class AdbClient {
    */
   async setOrientation(landscape) {
     try {
-      // 自动旋转必须关掉（否则传感器会乱转）。
-      await this.shell('settings put system accelerometer_rotation 0; wm size reset', { timeout: 15000 });
+      // 自动旋转开关默认打开（0.5.9）：写 guest 的 accelerometer_rotation=1，
+      // 让系统设置里那个开关是「开」的。方向本身由下面的 wm user-rotation lock 0
+      // + set-ignore-orientation-request 决定，不受传感器影响，所以不会乱转。
+      // 用户可在设置 →「镜像自动旋转」关掉，回到旧的锁定 0 行为。
+      await this.shell(`settings put system accelerometer_rotation ${guestAutoRotate()}; wm size reset`, { timeout: 15000 });
       // 方向锁 **0**（不是 1）。物理面板的方向已经由 hw.lcd.width/height 决定
       // （见 doctor.lcdFor），这里再锁 1 等于把横面板又转成竖逻辑空间，
       // 结果就是画面躺倒 90° —— 这正是「横屏没弄好」的直接原因。
@@ -955,7 +969,7 @@ class AdbClient {
       // 左上角一小块、右边一大片空白，也就是用户说的「墨读没有填满窗口」。
       // 现在在这里连同 size 一起重设，启动路径上不再有中途改密度。
       await this.shell(`wm size reset; wm density ${tabletDensity()}`, { timeout: 15000 });
-      await this.shell('settings put system accelerometer_rotation 0', { timeout: 15000 });
+      await this.shell(`settings put system accelerometer_rotation ${guestAutoRotate()}`, { timeout: 15000 });
       // 与 setOrientation 保持一致：面板方向说了算，逻辑方向锁 0。
       await this.shell('wm user-rotation lock 0', { timeout: 15000 });
       await this.shell(`wm set-ignore-orientation-request ${landscape ? 'true' : 'false'}`, { timeout: 15000 });

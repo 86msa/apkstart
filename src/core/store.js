@@ -177,9 +177,17 @@ const DEFAULT_SETTINGS = {
     // 越过 Android 的平板断点）。红果短剧这类应用只有在平板排版下才有双列剧集页，
     // 也是用户要的「平板模式」。关掉就回到镜像默认密度（手机排版）。
     tabletMode: true,
-    // 窗口模式：true=把安卓画面嵌进 ApkStart 自己的窗口（观感统一）；
-    // false=让模拟器开自己的原生窗口（绕开嵌入固有的黑边/坐标错位/铺不满问题）。
+    // 窗口承载方式：true=把安卓画面嵌进 ApkStart 自己的窗口（观感统一，
+    // 标题栏带旋转/最小化/最大化/关闭按钮）；
+    // false=让模拟器开自己的原生 Qt 窗口（绕开嵌入固有的黑边/坐标错位/铺不满问题，
+    // 但原生窗口没有我们的旋转按钮，横屏只能走托盘菜单）。
+    // 0.5.9 起默认回到嵌入模式：用户要「之前那个好看、带旋转按钮的窗口」。
+    // 两种模式仍然都能在设置里选（display.windowEmbed）。
     windowEmbed: true,
+    // 镜像内「自动旋转」开关：默认打开（写 guest 的 accelerometer_rotation=1），
+    // 面板方向仍由 wm user-rotation lock + set-ignore-orientation-request 决定，
+    // 不会被传感器带歪。关掉可回到旧的强制锁定行为。
+    autoRotate: true,
   },
 };
 
@@ -267,6 +275,26 @@ const store = {
     // 旧版本用 Android freeform 小窗，现在整个模拟器窗口就是应用窗口，
     // 应用必须铺满这块屏幕，否则会出现「窗口里再套一个小窗」。
     s.freeform = false;
+
+    /**
+     * 0.5.9 一次性迁移：把旧配置里被设成独立窗口（原生 Qt 窗口）的用户
+     * 带回嵌入模式 —— 那才是「好看、标题栏带旋转按钮」的窗口。
+     * 关键：只迁移一次（写 disk 标记）。迁移后用户再主动选独立窗口，
+     * 我们要尊重，不能每次启动都又把它扳回来。
+     * 用户数据文件里没有 windowEmbedMigrated 标记时读盘得到 undefined → 执行迁移。
+     */
+    try {
+      const raw = readJson(SETTINGS_FILE, {});
+      if (raw && raw.display && raw.display.windowEmbed === false
+          && !(raw.display && raw.display.windowEmbedMigrated)) {
+        s.display.windowEmbed = true;
+        s.display.windowEmbedMigrated = true;
+        // 立刻回写标记，保证只迁一次；把用户自己的其它字段原样保留。
+        const migrated = { ...raw, display: { ...raw.display, windowEmbed: true, windowEmbedMigrated: true } };
+        writeJson(SETTINGS_FILE, migrated);
+      }
+    } catch (_) { /* 迁移失败不影响启动，保持读到的值 */ }
+
     return s;
   },
 

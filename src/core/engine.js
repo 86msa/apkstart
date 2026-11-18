@@ -712,6 +712,9 @@ class Runtime {
 
   /** 优雅停止：emulator 走控制台关机，QEMU 走 monitor */
   async stop({ graceful = true } = {}) {
+    // 运行时一停，之前缓存的 guest 网络结论立即作废。否则旋转/重启后新机器
+    // 还没联网，waitForNetwork 却因为 8 秒缓存直接返回 ok，应用又会黑屏。
+    this._lastNetwork = null;
     const adbPath = this.adbPath();
     if (this.emulator.running()) {
       await this.emulator.stop({ adbPath });
@@ -1401,6 +1404,14 @@ class Runtime {
       this._lastNetwork = { ok: !!(r && r.ok), ip: (r && r.ip) || '', reason: (r && r.reason) || '', at: Date.now() };
       return r;
     };
+    // 速度优化：热启动 / 旋转重启后，启动路径上会连续调用本函数
+    // （restartForOrientation 等一次、installer.launch 又等一次）。
+    // 网络就绪是稳定的，8 秒内刚确认过就直接用结论，省掉整轮 adb 往返
+    // （每次 isOnline + checkNetwork 都是两次 shell，实测要几百毫秒到 1 秒）。
+    // 窗口取 8 秒：足够覆盖连续调用，又不会在真的断网后长时间骗用户。
+    // 注意 stop() 会清掉 _lastNetwork，所以重启后不会误用关机前的旧状态。
+    const cached = this._lastNetwork;
+    if (cached && cached.ok && Date.now() - cached.at < 8000) return cached;
     const t0 = Date.now();
     let last = null;
     let lastNotice = 0;

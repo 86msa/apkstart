@@ -610,6 +610,7 @@ const MENU_ITEMS = [
   // 应用一起来就关不掉，只能退到托盘退出整个 ApkStart。
   { key: 'stop', label: '关闭应用', onlyRunning: true },
   { key: 'shortcut', label: '创建桌面快捷方式' },
+  { key: 'orientation', label: '横屏 / 竖屏' },
   { key: 'pin', label: '固定到顶部' },
   { key: 'keymap', label: '按键映射…' },
   { divider: true },
@@ -626,7 +627,11 @@ function showMenu(x, y, pkg) {
   const items = MENU_ITEMS.filter((it) => !it.onlyRunning || (app && app.running));
   menu.innerHTML = items.map((it) => {
     if (it.divider) return '<div class="divider"></div>';
-    const label = it.key === 'pin' ? (app && app.pinned ? '取消固定' : '固定到顶部') : it.label;
+    const label = it.key === 'pin' ? (app && app.pinned ? '取消固定' : '固定到顶部')
+      : (it.key === 'orientation'
+        ? (app && app.orientationOverride === 'landscape' ? '竖屏启动（当前横屏）'
+          : (app && app.orientationOverride === 'portrait' ? '横屏启动（当前竖屏）' : '设为横屏启动'))
+        : it.label);
     return `<div class="item ${it.danger ? 'danger' : ''}" data-key="${it.key}" data-act="${it.key}">
       <span>${esc(label)}</span>${it.kbd ? `<span class="k">${it.kbd}</span>` : ''}
     </div>`;
@@ -664,6 +669,24 @@ async function handleMenu(act) {
       return refreshApps();
     }
     case 'shortcut': return createShortcut(pkg);
+    case 'orientation': {
+      // 三态循环：跟随应用 → 横屏 → 竖屏 → 跟随应用
+      // 这样红果这类被清单判成竖屏的应用，用户点一下就能强制横屏并记住。
+      const cur = app.orientationOverride;
+      const next = cur === 'landscape' ? 'portrait' : (cur === 'portrait' ? null : 'landscape');
+      try {
+        const r = await api.setAppOrientation(pkg, next);
+        const txt = next === 'landscape' ? '横屏启动' : (next === 'portrait' ? '竖屏启动' : '跟随应用');
+        toast({ title: `已设为${txt}`, body: '下次打开该应用时生效，无需重启整个环境。', type: 'ok' });
+        if (r && typeof r.landscape === 'boolean' && state.apps) {
+          const rec = state.apps.find((a) => a.package === pkg);
+          if (rec) rec.orientationOverride = next;
+        }
+      } catch (e) {
+        toast({ title: '设置方向失败', body: e.message, type: 'error' });
+      }
+      return refreshApps();
+    }
     case 'pin': return api.pin(pkg, !app.pinned).then(refreshApps);
     case 'keymap': return showKeymapPicker(pkg, app.label);
     case 'reveal': return api.revealApk(pkg);
@@ -1039,6 +1062,7 @@ function fillSettings(s) {
   if ($('setAutoFullscreen')) $('setAutoFullscreen').value = d.autoFullscreenOnLaunch === true ? 'on' : 'off';
   if ($('setLandscape')) $('setLandscape').value = d.landscape === true ? 'landscape' : 'portrait';
   if ($('setOrientationMode')) $('setOrientationMode').value = d.orientationMode || 'auto';
+  if ($('setAutoRotate')) $('setAutoRotate').value = d.autoRotate === false ? 'off' : 'on';
   if ($('setTabletMode')) $('setTabletMode').value = d.tabletMode === false ? 'off' : 'on';
   $('setPortrait').value = d.portrait || '900x1600';
   if ($('setWindowEmbed')) $('setWindowEmbed').value = d.windowEmbed === false ? 'detached' : 'embed';
@@ -1473,6 +1497,17 @@ function bindSettings() {
         body: mode === 'auto'
           ? '下次打开应用时会按应用自己的方向选面板，方向不一致的话会重启一次运行时。'
           : '下次打开应用时会重启一次运行时把面板切到指定方向，之后不再重启。',
+        type: 'ok',
+      });
+    });
+  }
+  if ($('setAutoRotate')) {
+    $('setAutoRotate').addEventListener('change', async (e) => {
+      const on = e.target.value === 'on';
+      state.settings = await api.setSettings({ display: { autoRotate: on } });
+      toast({
+        title: on ? '已打开镜像自动旋转' : '已关闭镜像自动旋转',
+        body: '下次打开应用时写进安卓镜像。画面方向仍由屏幕方向策略决定，不受此开关影响。',
         type: 'ok',
       });
     });

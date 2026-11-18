@@ -254,6 +254,15 @@
             之后再打开同一方向的应用都是秒进。</span>
         </div>
         <div class="field">
+          <label>镜像自动旋转</label>
+          <select id="setAutoRotate">
+            <option value="on">打开（默认）· 系统设置里显示自动旋转已开启</option>
+            <option value="off">关闭 · 回到旧的锁定行为</option>
+          </select>
+          <span class="sub">安卓里<b>自动旋转开关默认打开</b>。注意这不影响画面方向：面板方向和屏幕方向仍由上面的
+            策略 + 忽略应用方向请求决定，不会被传感器带歪。只有个别应用读取这个开关值时才会用到。</span>
+        </div>
+        <div class="field">
           <label>平板排版</label>
           <select id="setTabletMode">
             <option value="on">打开（推荐 · 逻辑密度 190dpi，sw606dp 走平板排版）</option>

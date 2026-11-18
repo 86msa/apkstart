@@ -473,10 +473,14 @@ class AppWindow {
    * 1280x720 并重启模拟器。重启约 30~60 秒，所以这里只做一次、并给出明确提示。
    *
    * @param {(next:boolean)=>Promise<boolean>} [onRestart] 由上层注入的重启实现
+   * @param {boolean} [explicitNext] 目标方向。传入时直接用它，不再取反 ——
+   *        旋转入口统一算好方向后传进来，避免这里和上层各算各的导致
+   *        「写进 apps.json 的覆盖值」与「实际切过去的面板方向」相反。
    */
-  async rotate(onRestart) {
+  async rotate(onRestart, explicitNext) {
     if (!this.isOpen) return this.state.landscape;
-    const next = !this.state.landscape;
+    const next = explicitNext === undefined || explicitNext === null
+      ? !this.state.landscape : !!explicitNext;
     this.setState({ tip: next ? '正在切换到横屏（重启安卓运行时，约 30-60 秒）…' : '正在切回竖屏（重启安卓运行时，约 30-60 秒）…', ready: false });
     if (typeof onRestart === 'function') {
       const ok = await onRestart(next).catch(() => false);

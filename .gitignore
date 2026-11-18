@@ -1,6 +1,7 @@
 node_modules/
 dist/
 build/runtime/
+build/_packout/
 .workbuddy/
 test/out/
 test/fixtures/

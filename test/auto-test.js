@@ -2563,6 +2563,75 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(/iconIndex: 0/.test(shortcutJs), 'iconIndex 要是 0');
   });
 
+  await test('红果横屏：方向决策必须收敛到纯函数，覆盖优先于 APK 清单', () => {
+    const root = path.join(__dirname, '..');
+    const o = require('../src/core/orientation');
+
+    // 强制模式最高优先级
+    assert(o.resolveLandscape({ mode: 'landscape', orientation: 'portrait', orientationOverride: 'portrait' }) === true,
+      '强制横屏要盖过一切');
+    assert(o.resolveLandscape({ mode: 'portrait', orientation: 'landscape', orientationOverride: 'landscape' }) === false,
+      '强制竖屏要盖过一切');
+    // 单应用覆盖优先于 APK 清单声明 —— 红果 APK 声明 portrait，用户点横屏后必须横过来
+    assert(o.resolveLandscape({ mode: 'auto', orientation: 'portrait', orientationOverride: 'landscape' }) === true,
+      'per-app 横屏覆盖要盖过 APK 的 portrait 声明');
+    assert(o.resolveLandscape({ mode: 'auto', orientation: 'landscape', orientationOverride: 'portrait' }) === false,
+      'per-app 竖屏覆盖要盖过 APK 的 landscape 声明');
+    // 没覆盖时跟 APK 声明，再没有就跟面板
+    assert(o.resolveLandscape({ mode: 'auto', orientation: 'portrait' }) === false, '无覆盖时跟 APK 声明');
+    assert(o.resolveLandscape({ mode: 'auto', orientation: null, panelLandscape: true }) === true, '跟随重力时跟面板');
+    // 旋转取反 + 覆盖值往返一致（旋转按钮写覆盖、下次启动读回来必须是同一个方向）
+    assert(o.flipLandscape(false) === true && o.flipLandscape(true) === false, 'flip 要取反');
+    assert(o.parseOverride(o.overrideValue(true)) === true, '横屏覆盖值往返一致');
+    assert(o.parseOverride(o.overrideValue(false)) === false, '竖屏覆盖值往返一致');
+
+    // 三个入口必须都走同一个决策函数，不能再各算各的（红果横不过来的根因）
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    assert(/wantLandscapeFor\(pkg\)\s*\)?\.?\s*/.test(mainJs) && /orientation\.resolveLandscape/.test(mainJs),
+      'wantLandscapeFor 要走 resolveLandscape');
+    assert(/async function rotateCurrentApp\(\)/.test(mainJs), '要有统一的旋转入口');
+    assert(/orientation\.flipLandscape\(current\)/.test(mainJs), '旋转入口要用同一个 flip');
+    assert(/orientation\.overrideValue\(next\)/.test(mainJs), '旋转入口要写同一个覆盖值');
+    const shellJs = fs.readFileSync(path.join(root, 'src', 'ui', 'shell.js'), 'utf8');
+    assert(/shell\.rotate\(\)/.test(shellJs), '标题栏旋转按钮要走统一入口');
+  });
+
+  await test('镜像自动旋转默认打开，但面板方向仍由 wm 锁定', () => {
+    const root = path.join(__dirname, '..');
+    const o = require('../src/core/orientation');
+    // 默认（没设置 / 没关过）= 打开
+    assert(o.autoRotateSetting({}) === '1', '默认打开自动旋转');
+    assert(o.autoRotateSetting({ display: {} }) === '1', 'display 为空也算默认打开');
+    assert(o.autoRotateSetting({ display: { autoRotate: false } }) === '0', '用户显式关掉才返回 0');
+    // store 默认要写 true
+    const storeJs = fs.readFileSync(path.join(root, 'src', 'core', 'store.js'), 'utf8');
+    assert(/autoRotate:\s*true/.test(storeJs), 'store 默认 autoRotate=true');
+    // adb 两段都要写加速度开关，且保留方向锁权威命令（测试前面已断言 lock 0 / ignore-request）
+    const adbJs = fs.readFileSync(path.join(root, 'src', 'core', 'adb.js'), 'utf8');
+    assert(/accelerometer_rotation \$\{guestAutoRotate\(\)\}/.test(adbJs), 'adb 要用 guestAutoRotate 值');
+  });
+
+  await test('窗口模式：默认回到嵌入窗口，两种模式可在设置里切换，且只迁移一次', () => {
+    const root = path.join(__dirname, '..');
+    const storeJs = fs.readFileSync(path.join(root, 'src', 'core', 'store.js'), 'utf8');
+    assert(/windowEmbed:\s*true/.test(storeJs), '默认嵌入窗口');
+    // 一次性迁移：用 windowEmbedMigrated 标记，避免用户主动选了独立窗口后又被扳回来
+    assert(/windowEmbedMigrated/.test(storeJs), '要有一次性迁移标记');
+    assert(/raw\.display\.windowEmbed === false/.test(storeJs), '只对旧用户的 false 做迁移');
+    const indexHtml = fs.readFileSync(path.join(root, 'src', 'ui', 'index.html'), 'utf8');
+    assert(/setWindowEmbed/.test(indexHtml), '设置里要有窗口模式切换入口');
+  });
+
+  await test('加载速度：网络状态新鲜缓存快速复用，运行时停止即作废', () => {
+    const root = path.join(__dirname, '..');
+    const engineJs = fs.readFileSync(path.join(root, 'src', 'core', 'engine.js'), 'utf8');
+    // waitForNetwork 命中 8 秒内的缓存直接返回，省掉连续调用的 adb 往返
+    assert(/cached\.ok && Date\.now\(\) - cached\.at < 8000/.test(engineJs), 'waitForNetwork 要复用新鲜网络缓存');
+    // stop() 里清掉缓存，重启后不会误用关机前的旧状态导致黑屏
+    const stopBody = engineJs.slice(engineJs.indexOf('async stop('), engineJs.indexOf('async stop(') + 400);
+    assert(/this\._lastNetwork = null/.test(stopBody), 'stop 要清掉网络缓存');
+  });
+
   console.log(results.join('\n'));
   console.log(`\n结果：${passed} 通过，${failed} 失败\n`);
   try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (_) { /* ignore */ }

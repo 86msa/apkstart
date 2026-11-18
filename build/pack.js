@@ -22,8 +22,21 @@ let OUT = process.env.APKSTART_PACK_OUT
   : path.join(ROOT, 'dist', FULL ? `ApkStart-v${PKG.version}-win64-full` : 'ApkStart-win64-portable');
 const ELECTRON_DIST = path.join(ROOT, 'node_modules', 'electron', 'dist');
 
+// Windows 上 fs.cpSync 复制「大量小文件 + 大镜像」的目录树时会偶发
+// EINPROGRESS（Node 错误地报成 "not enough space on the disk"，实际磁盘还剩上百 G）。
+// 改用逐文件 copyFileSync 的朴素递归：慢一点点，但每个文件都是独立 syscall，
+// 不会被目录树级的竞态打断，也不会像 robocopy 那样在受管 shell 下挂起。
 function copy(src, dest) {
-  fs.cpSync(src, dest, { recursive: true });
+  const st = fs.statSync(src);
+  if (st.isDirectory()) {
+    fs.mkdirSync(dest, { recursive: true });
+    for (const entry of fs.readdirSync(src)) {
+      copy(path.join(src, entry), path.join(dest, entry));
+    }
+  } else {
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.copyFileSync(src, dest);
+  }
 }
 
 console.log(FULL ? '打包完整版（含运行时）→' : '打包便携版 →', OUT);
@@ -103,7 +116,7 @@ for (const opt of ['engine']) {
   fs.mkdirSync(dest, { recursive: true });
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
     if (opt === 'engine' && ENGINE_SKIP.has(entry.name)) continue;
-    fs.cpSync(path.join(src, entry.name), path.join(dest, entry.name), { recursive: true });
+    copy(path.join(src, entry.name), path.join(dest, entry.name));
   }
 }
 
@@ -117,7 +130,7 @@ if (FULL) {
     process.exit(1);
   }
   console.log('内置运行时（约 1 GB，需要一会儿）…');
-  fs.cpSync(runtime, path.join(OUT, 'resources', 'runtime'), { recursive: true });
+  copy(runtime, path.join(OUT, 'resources', 'runtime'));
 }
 
 // 3.6 独立运行守卫：产物里不许出现 MuMu / 雷电 / 蓝叠等第三方模拟器。
