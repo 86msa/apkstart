@@ -1,4 +1,4 @@
-# Microsoft Store 提交材料（ApkStart 0.6.0）
+# Microsoft Store 提交材料（ApkStart 0.6.1）
 
 > 这份文件是给 Partner Center 表单直接复制用的。包体、图标、清单由脚本产出，
 > 只有「注册账号 → 预留名称 → 上传 → 送审」必须在网页上人工完成。
@@ -12,7 +12,7 @@
 | Product name | `ApkStart` |
 | Category | Developer tools → Utilities & tools（备选：Productivity） |
 | Price | Free |
-| Package | `dist/store/ApkStart_0.6.0.0_x64.msix`（x64，约 1.5 GB） |
+| Package | `dist/store/ApkStart_0.6.1.0_x64.msix`（x64，约 1.5 GB） |
 | 支持语言 | 简体中文 / English (United States) |
 | 官网 | https://github.com/RoutineMiku/apkstart |
 | 支持邮箱 | <!-- 填你的邮箱 --> |
@@ -22,7 +22,12 @@
 
 **中文**
 ```
-0.6.0：
+0.6.1：
+· 修复「启动后看到的还是 ApkStart 的美化等待窗口」：现在一点开应用就让模拟器原生窗口接管画面，你能立刻看到安卓自己的开机画面，而不是我们的转圈页。
+· 原生窗口接管失败会自动重试 4 次（冷启动、换横竖屏之后 Qt 窗口会晚一点才出现），四次都不成功才临时退回内置窗口，不会再留下一屏黑或一张永远转圈的等待页。
+· 默认窗口设置加固：只要没在设置里主动切换过窗口承载方式，一律按模拟器原生窗口启动；老配置里残留的嵌入开关也会被自动纠正。
+
+0.6.0（已包含）：
 · 修复底部「按键错位」：安卓 13 的平板任务栏（屏幕底部那条半透明栏）在平板排版下会盖住应用、把返回/主页/最近键挤到左下角，现在默认关闭。
 · 启动动画延长到应用真正画出第一屏再淡出，不再出现「白底 + 应用图标」的空白等待。
 · 启动提速：已授予的权限不再每次重复授予，大型应用单这一项就能省 20 秒以上。
@@ -90,7 +95,12 @@
 
 **English**
 ```
-0.6.0:
+0.6.1:
+· Fixed "launching an app still shows ApkStart's own styled waiting window": the emulator's native window now takes over the moment you open an app, so you see Android's own boot screen instead of our spinner page.
+· Native window hand-over now retries four times (Qt's window can appear a little late on cold starts and after an orientation change); only if all four fail does it temporarily fall back to the built-in window — no more black screen and no endless spinner.
+· Hardened the default window setting: unless you explicitly switched the window host in Settings, ApkStart always launches with the emulator's native window, and a leftover "embedded" flag from older configs is corrected automatically.
+
+0.6.0 (included):
 · Fixed the "misaligned buttons" at the bottom: on tablet layout Android 13's large-screen taskbar sits over the app and squeezes back/home/recents into the bottom-left corner — it is now off by default.
 · The startup animation now stays until the app really draws its first frame, so you no longer stare at a white screen with just the app icon.
 · Faster launches: permissions that were already granted are no longer re-granted on every start — for large apps that alone saves 20+ seconds.
@@ -361,7 +371,7 @@ Notes:
    ```powershell
    node build/msix.js --identity "<Identity/Name>" --publisher "<Identity/Publisher>"
    ```
-4. **Packages** → 上传 `dist/store/ApkStart_0.6.0.0_x64.msix`，等待校验通过。
+4. **Packages** → 上传 `dist/store/ApkStart_0.6.1.0_x64.msix`，等待校验通过。
 5. **Store listing** → 填第 2–5 节的内容、上传截图、选分类。
 6. **Pricing and availability** → Free，市场选中国 + 全球。
 7. **Submission options** → 粘贴第 6 节的 certification notes。

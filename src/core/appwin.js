@@ -309,7 +309,10 @@ class AppWindow {
    * @returns {Promise<boolean>} 是否成功切到独立窗口
    */
   async openDetached() {
-    if (!this.isOpen) return false;
+    // 壳窗口已经关掉（用户点了关闭 / 启动过程中被收掉）时没有可承载的对象。
+    // 把原因记下来：否则上层日志只能打一个 "unknown"，完全看不出是「窗口没了」
+    // 还是「模拟器窗口找不到」。
+    if (!this.isOpen) { this.lastEmbedError = 'shell-closed'; return false; }
     // 壳窗口在独立模式下绝不能露脸（它没有内容，只会是一块黑）。
     // 但 showWhileWaiting 时它现在是可见的「等待提示」，这里负责收起它。
     try { this.win.hide(); } catch (_) { /* ignore */ }

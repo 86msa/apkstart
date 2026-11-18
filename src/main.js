@@ -491,11 +491,45 @@ async function restartForOrientation(landscape, { reloadApp = true } = {}) {
  *   由设置 display.windowEmbed 控制（true 才是嵌入）。
  */
 async function attachAppWindow() {
-  if (!appWin || !appWin.isOpen) return false;
+  if (!appWin) return false;
   const embedMode = displaySettings().windowEmbed === true;
   if (!embedMode) {
-    // 独立窗口不需要标题栏里那块区域了，直接让模拟器窗口自己露出来
-    return appWin.openDetached().catch(() => false);
+    /**
+     * 原生窗口接管要重试。
+     *
+     * 模拟器窗口出现在系统里的时间点，和 `am start` 返回的时间点并不同步：
+     * 冷启动、快照恢复、刚换过面板方向之后，Qt 那扇窗口往往要晚几百毫秒到
+     * 一两秒才可见。以前只试一次，失败后什么都不做 —— 壳窗口那张「正在启动」
+     * 的美化等待页就留在屏幕上，用户看到的就是「启动的还是你们那个美化窗口」，
+     * 而且再也接不上画面（日志里的 attach failed (detached): unknown）。
+     */
+    for (let i = 0; i < 4; i += 1) {
+      if (!appWin.isOpen) {
+        appLog(`attach detached: 壳窗口已关闭（第 ${i + 1} 轮）`);
+        return false;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      const ok = await appWin.openDetached().catch((e) => {
+        appWin.lastEmbedError = (e && e.message) || 'threw';
+        return false;
+      });
+      if (ok) return true;
+      appLog(`attach detached #${i + 1} 失败: ${appWin.lastEmbedError || 'unknown'}`);
+      // 逐轮拉长等待：窗口代理的 show/layout 也可能正好撞上窗口重建
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => setTimeout(r, 400 + i * 600));
+    }
+    // 四轮都没露出来（远程桌面 / 显卡驱动异常 / 模拟器被 --no-window 起过）：
+    // 与其留一屏黑或者一张永远转圈的等待页，不如先用嵌入把画面接上，
+    // 并明确告诉用户这是兜底 —— 下次启动仍然优先原生窗口。
+    appLog('attach detached: 重试全部失败，临时退回嵌入模式');
+    const fallback = await appWin.embed().catch(() => false);
+    if (fallback) {
+      try {
+        send('toast', { type: 'info', message: '模拟器原生窗口没能显示，本次临时用内置窗口接管画面' });
+      } catch (_) { /* 主窗口可能已关闭 */ }
+    }
+    return fallback;
   }
   const ok = await appWin.embed().catch(() => false);
   if (!ok) {
@@ -1126,6 +1160,30 @@ async function launchOne(pkg) {
     if (mainWindow && mainWindow.isVisible() && !IS_DEV) mainWindow.hide();
     // 1) 再把「应用窗口」打开显示启动动画：整个过程看不到安卓桌面，也看不到模拟器窗口
     await openAppWindow(pkg, '正在启动安卓运行时…');
+    /**
+     * 原生窗口模式：**尽早、反复**把模拟器自己的窗口接出来，别让用户先对着
+     * 我们那张「正在启动」的壳窗口干等。
+     *
+     * 以前这里什么都不做，壳窗口（标题栏 + Logo + 转圈）就成了用户看到的第一屏，
+     * 而原生窗口要等到 am start 之后才接 —— 冷启动 / 换面板方向时那是 30 秒以上。
+     * 用户的感受就是「启动的还是你们那个美化窗口」。
+     *
+     * 冷启动时 Qt 窗口要等运行时起来才被创建，一次尝试必然失败，所以这里做成
+     * 轮询：每 1.5 秒试一次，成功即停（最多 30 秒）。换面板方向重启运行时时，
+     * 旧窗口随运行时消失、新窗口起来后同样会被这里接住。
+     */
+    if (displaySettings().windowEmbed === false && appWin && appWin.isOpen) {
+      let tries = 0;
+      const preAttach = async () => {
+        if (!appWin || !appWin.isOpen) return;
+        tries += 1;
+        // eslint-disable-next-line no-await-in-loop
+        const ok = await appWin.openDetached().catch(() => false);
+        if (ok) { appLog(`pre-attach detached ok（第 ${tries} 次）`); return; }
+        if (tries < 20) setTimeout(preAttach, 1500);
+      };
+      preAttach();
+    }
     // 开机阶段把模拟器主窗 + qemu / netsimd 的控制台黑窗藏起来，避免任何闪现。
     // 压制是常驻的（embed 后它会自动跳过被嵌入的那一个窗口，见 appwin.embed）。
     // 这里必须 await：不等压制生效就往下走，黑窗会在启动瞬间露出来。

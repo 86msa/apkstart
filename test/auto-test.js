@@ -2620,6 +2620,18 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     // 一次性迁移：只迁「没主动选过」的配置，用户自己选的不能被反复扳回来
     assert(/windowEmbedMigrated2/.test(storeJs), '要有一次性迁移标记');
     assert(/windowEmbedChosen !== true/.test(storeJs), '主动选过的配置不迁移');
+    // 只看标记不够：老配置可能是「migrated2=true 但值仍是 true」（迁移没落盘 / 手改过），
+    // 那种情况以前会被原样放过 → 启动又是美化壳窗口。判定基准必须是「有没有主动选过」。
+    const migBody = storeJs.slice(storeJs.indexOf('窗口承载方式的最终裁决'), storeJs.indexOf('窗口承载方式的最终裁决') + 1200);
+    assert(/d\.windowEmbedChosen !== true && d\.windowEmbed !== false/.test(migBody),
+      '迁移条件不能依赖 windowEmbedMigrated2，否则旧标记会漏迁');
+    // 原生窗口要尽早接出来，别让用户对着美化等待页干等
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    assert(/pre-attach detached ok/.test(mainJs), '启动时要先尝试把模拟器原生窗口接出来');
+    // 接管失败必须重试，否则壳窗口一直停在屏幕上（用户看到的「美化窗口」）
+    const attachBody = mainJs.slice(mainJs.indexOf('async function attachAppWindow'), mainJs.indexOf('async function attachAppWindow') + 2200);
+    assert(/for \(let i = 0; i < 4; i \+= 1\)/.test(attachBody), '原生窗口接管要重试');
+    assert(/临时退回嵌入模式/.test(attachBody), '四轮都失败要兜底，不能留黑屏');
     const appJs = fs.readFileSync(path.join(root, 'src', 'ui', 'app.js'), 'utf8');
     assert(/windowEmbedChosen:\s*true/.test(appJs), '设置页切换时要写入「已主动选择」标记');
     const indexHtml = fs.readFileSync(path.join(root, 'src', 'ui', 'index.html'), 'utf8');

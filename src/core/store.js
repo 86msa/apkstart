@@ -285,30 +285,30 @@ const store = {
     s.freeform = false;
 
     /**
-     * 0.6.0 一次性迁移：把「嵌入窗口」带回原生窗口。
+     * 窗口承载方式的最终裁决：**默认必须是模拟器原生窗口**。
      *
      * 0.5.9 曾把所有人强制迁到嵌入模式，结果嵌入方式（SetParent + 反复
      * SetWindowPos 重排别人的窗口）在缩放/旋转/切应用时掉帧，并伴随黑边、
      * 坐标错位、铺不满，是用户反馈最集中的一类问题。原生窗口由模拟器自己
      * 渲染和排布，这些问题不存在，所以默认改回它。
      *
-     * 只迁移「没在设置里主动选过」的配置（windowEmbedChosen 由设置页写入）：
-     * 迁移后用户再手动切回嵌入模式，我们尊重，不再每次启动扳回来。
+     * 这里不再只看「迁移标记」：只要用户**没有在设置页主动选过**
+     * （windowEmbedChosen 由设置页写入），读到的值一律纠正为原生，并存回磁盘。
+     * 之前的写法只要 windowEmbedMigrated2 已经是 true 就放手不管，于是老配置里
+     * 那句 windowEmbed:true 会一直生效 —— 用户升级后启动看到的仍是美化壳窗口，
+     * 却以为「默认设置没改」。判定基准只认「有没有主动选过」，其它标记都不算数。
      */
     try {
       const raw = readJson(SETTINGS_FILE, {});
-      const d = raw && raw.display;
-      if (d && d.windowEmbed !== false
-          && !d.windowEmbedMigrated2
-          && d.windowEmbedChosen !== true) {
+      const d = (raw && raw.display) || {};
+      if (d.windowEmbedChosen !== true && d.windowEmbed !== false) {
         s.display.windowEmbed = false;
         s.display.windowEmbedMigrated2 = true;
-        // 立刻回写，保证只迁一次；用户其它字段原样保留。
-        const migrated = {
+        // 立刻回写，保证配置文件本身也回到原生；用户其它字段原样保留。
+        writeJson(SETTINGS_FILE, {
           ...raw,
           display: { ...d, windowEmbed: false, windowEmbedMigrated2: true },
-        };
-        writeJson(SETTINGS_FILE, migrated);
+        });
       }
     } catch (_) { /* 迁移失败不影响启动，保持读到的值 */ }
 
