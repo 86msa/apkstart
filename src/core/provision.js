@@ -831,7 +831,23 @@ class Provisioner {
    * 展开到 %APPDATA% 而不是包里：便携版的运行时目录每次启动都是新的临时目录，
    * 放进去等于每次开机都重解压一遍。
    */
-  async materializeImages(onLog = () => {}) {
+  /**
+   * 同一时间只允许一次展开（single-flight）。
+   *
+   * 首次启动时「一键部署」和「开机预热 / 打开应用」会几乎同时调用这里。
+   * 两路同时写同一个 system.img.part 时，后来的一路会先 rmSync 掉前一路正在写的文件 ——
+   * Windows 上被占用的文件删除后进入 delete-pending 状态，再 open 就是
+   * EPERM: operation not permitted（用户诊断报告里实际出现过）。
+   * 第二个调用方直接等第一次的结果即可。
+   */
+  materializeImages(onLog = () => {}) {
+    if (this._materializing) return this._materializing;
+    this._materializing = this._materializeImagesOnce(onLog)
+      .finally(() => { this._materializing = null; });
+    return this._materializing;
+  }
+
+  async _materializeImagesOnce(onLog = () => {}) {
     const srcRoot = path.join(this.root, 'system-images');
     // 展开目标必须和 paths().sysImgRoot 用同一套规则，否则会出现
     // 「整包解到 D 盘、镜像又展开回 C 盘 APPDATA」的重复占用（实测 1.2GB + 3.3GB）。
@@ -883,46 +899,42 @@ class Provisioner {
       // 先解到 .part，成功后再改名：解压中途被打断（关程序 / 断电 / 磁盘满）
       // 不会留下一个「看着像已完成」的半截 system.img，否则下次会跳过展开、
       // 开机时死在镜像损坏上，用户只能删数据重来。
-      const part = `${j.dest}.part`;
-      try { fs.rmSync(part, { force: true }); } catch (_) { /* ignore */ }
       fs.mkdirSync(path.dirname(j.dest), { recursive: true });
-      onLog(__('首次启动：正在展开系统镜像 {0}（约 1 分钟，只需一次）', path.basename(j.dest)));
+      // 清掉以前留下的半截文件（system.img.part / system.img.<时间>.part）。
+      // 删不掉（仍被占用 / 杀软在扫）也没关系：这次用一个新名字写，不会撞上它。
       try {
-        // eslint-disable-next-line no-await-in-loop
-        await new Promise((resolve, reject) => {
-          const { pipeline, Readable } = require('stream');
-          if (j.xz) {
-            // LZMA2 解压：必须直接引原生绑定 index.js。
-            // 包默认入口 main.js / xz.js 内部会 require('stream-polyfill.mjs')，
-            // Electron 的 Node 20 不支持 require(ESM) 会抛错；而 exports 又不允许
-            // 直接写 '@napi-rs/lzma/index.js'，所以用 require.resolve 定位目录后按文件路径引。
-            const path0 = require('path');
-            let lzmaDir;
-            try {
-              lzmaDir = path0.dirname(require.resolve('@napi-rs/lzma'));
-            } catch (_) {
-              // 打包时漏带 node_modules/@napi-rs 就会走到这里。以前直接抛
-              // "Cannot find module '@napi-rs/lzma'"+一长串 require stack，
-              // 用户完全看不懂，只会觉得「装完什么应用都打不开」。
-              // 明确告诉他这是安装包不完整，而不是他的电脑有问题。
-              const e2 = new Error(__('安装包不完整：缺少解压组件 @napi-rs/lzma，系统镜像无法展开。请重新下载完整版，或改用商店版。'));
-              e2.code = 'LZMA_MISSING';
-              throw e2;
-            }
-            const { xz } = require(path0.join(lzmaDir, 'index.js'));
-            const webIn = Readable.toWeb(fs.createReadStream(j.src));
-            const webOut = xz.decompressStream(webIn);
-            pipeline(Readable.fromWeb(webOut), fs.createWriteStream(part), (err) => (err ? reject(err) : resolve()));
-          } else {
-            pipeline(
-              fs.createReadStream(j.src),
-              zlib.createGunzip(),
-              fs.createWriteStream(part),
-              (err) => (err ? reject(err) : resolve()),
-            );
+        const base = path.basename(j.dest);
+        for (const f of fs.readdirSync(path.dirname(j.dest))) {
+          if (f === `${base}.part` || (f.startsWith(`${base}.`) && f.endsWith('.part'))) {
+            try { fs.rmSync(path.join(path.dirname(j.dest), f), { force: true }); } catch (_) { /* ignore */ }
           }
-        });
-        fs.renameSync(part, j.dest);
+        }
+      } catch (_) { /* ignore */ }
+      onLog(__('首次启动：正在展开系统镜像 {0}（约 1 分钟，只需一次）', path.basename(j.dest)));
+      let part = `${j.dest}.part`;
+      try {
+        // 杀毒软件实时扫描刚下载的大文件时，Windows 会短暂报 EPERM / EBUSY / EACCES：
+        // 换个临时文件名、等几秒重试，最多 3 次。
+        for (let attempt = 1; ; attempt += 1) {
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            await this._extractOne(j, part);
+            break;
+          } catch (e) {
+            const transient = /^(EPERM|EBUSY|EACCES)$/.test(e && e.code);
+            if (!transient || attempt >= 3) throw e;
+            try { fs.rmSync(part, { force: true }); } catch (_) { /* ignore */ }
+            part = `${j.dest}.${Date.now()}.part`;
+            // eslint-disable-next-line no-await-in-loop
+            await new Promise((r) => setTimeout(r, 3000 * attempt));
+          }
+        }
+        // 目标若是被占用的旧文件，先挪走再改名
+        try { fs.renameSync(part, j.dest); } catch (e) {
+          if (!/^(EPERM|EBUSY|EACCES|EEXIST)$/.test(e && e.code)) throw e;
+          try { fs.rmSync(j.dest, { force: true }); } catch (_) { /* ignore */ }
+          fs.renameSync(part, j.dest);
+        }
         done += 1;
       } catch (e) {
         try { fs.rmSync(part, { force: true }); } catch (_) { /* ignore */ }
@@ -939,6 +951,43 @@ class Provisioner {
       throw err;
     }
     return done;
+  }
+
+  /** 把一个 .img.xz / .img.gz 解到 part 文件 */
+  _extractOne(j, part) {
+    return new Promise((resolve, reject) => {
+      const { pipeline, Readable } = require('stream');
+      if (j.xz) {
+        // LZMA2 解压：必须直接引原生绑定 index.js。
+        // 包默认入口 main.js / xz.js 内部会 require('stream-polyfill.mjs')，
+        // Electron 的 Node 20 不支持 require(ESM) 会抛错；而 exports 又不允许
+        // 直接写 '@napi-rs/lzma/index.js'，所以用 require.resolve 定位目录后按文件路径引。
+        const path0 = require('path');
+        let lzmaDir;
+        try {
+          lzmaDir = path0.dirname(require.resolve('@napi-rs/lzma'));
+        } catch (_) {
+          // 打包时漏带 node_modules/@napi-rs 就会走到这里。以前直接抛
+          // "Cannot find module '@napi-rs/lzma'"+一长串 require stack，
+          // 用户完全看不懂，只会觉得「装完什么应用都打不开」。
+          // 明确告诉他这是安装包不完整，而不是他的电脑有问题。
+          const e2 = new Error(__('安装包不完整：缺少解压组件 @napi-rs/lzma，系统镜像无法展开。请重新下载完整版，或改用商店版。'));
+          e2.code = 'LZMA_MISSING';
+          throw e2;
+        }
+        const { xz } = require(path0.join(lzmaDir, 'index.js'));
+        const webIn = Readable.toWeb(fs.createReadStream(j.src));
+        const webOut = xz.decompressStream(webIn);
+        pipeline(Readable.fromWeb(webOut), fs.createWriteStream(part), (err) => (err ? reject(err) : resolve()));
+      } else {
+        pipeline(
+          fs.createReadStream(j.src),
+          zlib.createGunzip(),
+          fs.createWriteStream(part),
+          (err) => (err ? reject(err) : resolve()),
+        );
+      }
+    });
   }
 
   /**
