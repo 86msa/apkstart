@@ -12,7 +12,7 @@
 | Product name | `ApkStart` |
 | Category | Developer tools → Utilities & tools（备选：Productivity） |
 | Price | Free |
-| Package | `dist/store/ApkStart_0.6.0.0_x64.msix`（x64，约 850 MB） |
+| Package | `dist/store/ApkStart_0.6.0.0_x64.msix`（x64，约 1.5 GB） |
 | 支持语言 | 简体中文 / English (United States) |
 | 官网 | https://github.com/RoutineMiku/apkstart |
 | 支持邮箱 | <!-- 填你的邮箱 --> |
@@ -23,6 +23,12 @@
 **中文**
 ```
 0.6.0：
+· 修复底部「按键错位」：安卓 13 的平板任务栏（屏幕底部那条半透明栏）在平板排版下会盖住应用、把返回/主页/最近键挤到左下角，现在默认关闭。
+· 启动动画延长到应用真正画出第一屏再淡出，不再出现「白底 + 应用图标」的空白等待。
+· 启动提速：已授予的权限不再每次重复授予，大型应用单这一项就能省 20 秒以上。
+· 默认改用模拟器原生窗口：拖拽、缩放、旋转不再掉帧，也不再出现黑边、坐标错位；想用带旋转按钮的标题栏可在设置里切回嵌入模式。
+· 修复 AMD 显卡电脑总是退回软件渲染导致的卡顿：硬件渲染关掉 Vulkan 后重试，真正吃到显卡加速。
+· 修复升级后仍在跑上一个安装包里的安卓运行时（旧包一删就启动失败）。
 · 设置页重新分类：按「常用与安装 / 显示与窗口 / 操作与输入 / 性能与资源 / 网络与下载 / 诊断与修复 / 集成与文件 / 更新与关于」八类归置，找设置项不再靠长列表翻。
 · 设置页新增搜索框，输入「横屏」「内存」「代理」等关键词即可直达对应设置项。
 · 新增「自动检测」：后台定时体检安卓运行时、adb 授权、磁盘余量、数据分区、快照与设置冲突，出问题按分类列出并可一键处理。
@@ -85,6 +91,12 @@
 **English**
 ```
 0.6.0:
+· Fixed the "misaligned buttons" at the bottom: on tablet layout Android 13's large-screen taskbar sits over the app and squeezes back/home/recents into the bottom-left corner — it is now off by default.
+· The startup animation now stays until the app really draws its first frame, so you no longer stare at a white screen with just the app icon.
+· Faster launches: permissions that were already granted are no longer re-granted on every start — for large apps that alone saves 20+ seconds.
+· The emulator's native window is now the default: dragging, resizing and rotating no longer stutter, and the black borders / misplaced clicks are gone. Switch back to the embedded window with the rotate button in Settings whenever you like.
+· Fixed stutter on AMD graphics PCs that always fell back to software rendering: hardware rendering is retried with Vulkan disabled, so the GPU is actually used.
+· Fixed upgrades still running the Android runtime from a previous install package (which broke as soon as the old folder was deleted).
 · Settings are now organized into eight categories (Essentials & Install, Display & Window, Input, Performance & Resources, Network & Downloads, Diagnostics & Fixes, Files & Integration, Updates & About) — no more hunting through one long list.
 · New search box in Settings: type "landscape", "memory", "proxy" and jump straight to the matching setting.
 · New "Auto diagnostics": the app periodically checks the Android runtime, adb authorization, free disk space, the data partition, snapshots and conflicting settings, then lists any problem by category with a one-click fix.

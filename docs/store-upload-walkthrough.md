@@ -7,7 +7,7 @@
 
 ## 0. 前置检查
 
-- [ ] `dist/store/ApkStart_0.6.0.0_x64.msix` 存在，约 850 MB
+- [ ] `dist/store/ApkStart_0.6.0.0_x64.msix` 存在，约 1.5 GB
 - [ ] 包里身份已换成你的真实值（见第 2 步；当前仍是占位 `RoutineMiku.ApkStart`）
 - [ ] 隐私政策有可公开访问的 URL
 

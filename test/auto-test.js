@@ -2675,8 +2675,68 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
       'require.resolve 要包在 try 里，失败时给友好错误');
   });
 
+  await test('按键错位：关掉大屏任务栏（Taskbar）', () => {
+    const root = path.join(__dirname, '..');
+    const adbJs = fs.readFileSync(path.join(root, 'src', 'core', 'adb.js'), 'utf8');
+    // 平板密度（sw606dp）会触发 Launcher 的 Taskbar：贴底、盖内容、按键挤在左下角
+    assert(/async disableLauncherTaskbar\(\)/.test(adbJs), '要有 disableLauncherTaskbar');
+    assert(/settings put global enable_taskbar 0/.test(adbJs), '任务栏开关用 global enable_taskbar');
+    // Launcher 只在启动时读一次开关，已起来必须重启才会消失
+    assert(/am force-stop com\.google\.android\.apps\.nexuslauncher/.test(adbJs), '要重启 Pixel Launcher');
+    // 每次启动都补一刀（幂等），并在开机初始化里做一次「检查+重启」
+    const pf = adbJs.slice(adbJs.indexOf('async prepareForeground('), adbJs.indexOf('async prepareForeground(') + 1600);
+    assert(/enable_taskbar 0/.test(pf), 'prepareForeground 要写任务栏开关');
+    const reset = adbJs.slice(adbJs.indexOf('async resetDisplayOverrides('), adbJs.indexOf('async resetDisplayOverrides(') + 1600);
+    assert(/disableLauncherTaskbar\(\)/.test(reset), 'resetDisplayOverrides 要调用 disableLauncherTaskbar');
+  });
+
+  await test('启动动画：守到应用第一帧再淡出', () => {
+    const root = path.join(__dirname, '..');
+    const adbJs = fs.readFileSync(path.join(root, 'src', 'core', 'adb.js'), 'utf8');
+    assert(/async waitForAppFirstFrame\(pkg/.test(adbJs), '要有 waitForAppFirstFrame');
+    // Android 12+ 在 Activity 首帧前会挂系统 Splash，判定就是它消失 + 焦点在目标包
+    assert(/Splash Screen/.test(adbJs), '要按系统 Splash 窗口判定首帧');
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    // 收动画前必须等首帧，否则用户看到白底 + 应用图标，以为卡死
+    const idx = mainJs.indexOf('waitForAppFirstFrame');
+    assert(idx > 0, 'main 要调用 waitForAppFirstFrame');
+    const after = mainJs.slice(idx, idx + 400);
+    assert(/splashDone/.test(after), '首帧之后才 splashDone');
+  });
+
+  await test('启动提速：权限授过就不再重复授（省 20s+）', () => {
+    const root = path.join(__dirname, '..');
+    const adbJs = fs.readFileSync(path.join(root, 'src', 'core', 'adb.js'), 'utf8');
+    const fn = adbJs.slice(adbJs.indexOf('async grantRuntimePermissions('), adbJs.indexOf('async grantRuntimePermissions(') + 2600);
+    // 命中缓存要直接返回，连 dumpsys package 都不跑
+    assert(/rec\.permGranted === true/.test(fn), '已授权限要命中缓存');
+    assert(/store\.upsertApp\(\{ package: pkg, permGranted: true \}\)/.test(fn), '授完要写标记');
+    const clear = adbJs.slice(adbJs.indexOf('async clearData('), adbJs.indexOf('async clearData(') + 400);
+    assert(/permGranted: false/.test(clear), 'pm clear 后要作废缓存');
+    const inst = fs.readFileSync(path.join(root, 'src', 'core', 'installer.js'), 'utf8');
+    assert(/permGranted: false/.test(inst), '重装后要作废缓存');
+  });
+
+  await test('卡顿：AMD host 后端关 Vulkan 后重试硬件加速', () => {
+    const root = path.join(__dirname, '..');
+    const emuJs = fs.readFileSync(path.join(root, 'src', 'core', 'emulator.js'), 'utf8');
+    assert(/-feature', '-Vulkan/.test(emuJs), 'host 后端要能关掉 Vulkan');
+    assert(/badGpuVulkanTried/.test(emuJs), '每个 emulator 版本要重试一次 host');
+    // 只在 host + AMD + Windows 生效，别把软件后端也带进不确定性
+    assert(/gpu === 'host' && process\.platform === 'win32' && doctor\.detectGpuVendor\(\) === 'amd'/.test(emuJs),
+      '仅 host + AMD 关闭 Vulkan');
+  });
+
+  await test('升级残留：运行时目录指向别的安装包时改用随包内置', () => {
+    const root = path.join(__dirname, '..');
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    assert(/looksForeignBundle/.test(mainJs), '要识别「另一个包的 resources/runtime」');
+    assert(/resources\[\\\\\/\]runtime\$/.test(mainJs), '按 resources/runtime 结尾判定');
+  });
+
   console.log(results.join('\n'));
   console.log(`\n结果：${passed} 通过，${failed} 失败\n`);
+
   try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (_) { /* ignore */ }
   process.exit(failed ? 1 : 0);
 })();

@@ -161,6 +161,19 @@ function bootstrapBundledRuntime() {
     // 就会一直走「缺组件」的部署向导。现在只要当前运行时目录里没有 emulator 就接管。
     const explicit = String(s.runtime.dir || '').trim();
     const current = explicit || path.join(store.DATA_DIR, 'runtime');
+    // 「另一个安装包的运行时」：路径是 <某目录>/resources/runtime，但不在本次 EXE 的目录树里。
+    // 这只可能来自「解压了新版便携包、settings.json 还记着旧包路径」——
+    // 实测后果很隐蔽：新包启动，实际跑的是上个版本的 emulator/镜像/快照，
+    // 用户升级后仍然卡顿、方向参数还是旧的，甚至旧包一删就彻底起不来。
+    // 用户自己挑的目录（D:\ApkStartRuntime 之类）不会被这条规则误伤。
+    const looksForeignBundle = /[\\/]resources[\\/]runtime$/i.test(current)
+      && !path.resolve(current).toLowerCase().startsWith(path.resolve(exeDir).toLowerCase());
+    if (looksForeignBundle && fs.existsSync(path.join(bundled, 'emulator', 'emulator.exe'))) {
+      store.saveSettings({ runtime: { dir: bundled } });
+      bundledRuntimeDir = bundled;
+      appLog(`运行时目录指向别的安装包（${current}），改用随包内置运行时 ${bundled}`);
+      return;
+    }
     const currentExe = path.join(current, 'emulator', 'emulator.exe');
     // 便携版被移动/升级（解压到新目录）后，settings 里记的还是旧路径：
     // 必须只认「本次 EXE 所在目录下的 runtime」，否则会一直用旧包里的组件
@@ -1133,14 +1146,23 @@ async function launchOne(pkg) {
         attachDoneEarly = true;
         mark('app up (提前接画面)');
         attachAppWindow()
-          .then((ok) => {
+          .then(async (ok) => {
             earlyAttachOk = ok;
             mark(`early attach=${ok}`);
-            // 画面已接到用户眼前 → 开机动画可以淡出了。
-            // 放在这里而不是 launch ok 之后，是因为 early attach 时模拟器窗口
-            // 已经 show 出来了；如果等 launch ok（还要再等 4 秒存活确认），
-            // splash 和模拟器窗口会同时可见好几秒，用户看到 splash 被「顶上去」。
-            if (ok && typeof splashDone === 'function') splashDone();
+            if (!ok) return;
+            // 画面接上 ≠ 首帧画出来：Android 12+ 在 Activity 首帧之前会先挂一屏
+            // 系统 Splash（应用图标 + 白底）。开机动画此时如果淡出，用户看到的就是
+            // 一张白底图，以为卡死。守到系统 Splash 撤掉（首帧上屏）再收动画，
+            // 超时也照常收（不能因为判定失败把用户永远关在动画里）。
+            let painted = true;
+            try {
+              const c = runtime.client();
+              if (c && typeof c.waitForAppFirstFrame === 'function') {
+                painted = await c.waitForAppFirstFrame(pkg, { timeoutMs: 12000 });
+              }
+            } catch (_) { /* 判定失败按已就绪处理 */ }
+            mark(`first frame=${painted}`);
+            if (typeof splashDone === 'function') splashDone();
           })
           .catch(() => { earlyAttachOk = false; });
         // 应用刚起来时 Activity 还在重建，会按自己声明的方向（portrait）再转一次，
