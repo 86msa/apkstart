@@ -157,6 +157,12 @@ const DEFAULT_SETTINGS = {
   // 启动欢迎卡：lastDate 记录上次自动弹出的日期（手动打开时一天最多一次），
   // disabled = 用户勾了「不再自动弹出」。
   welcome: { lastDate: '', disabled: false },
+  /**
+   * 自动检测（自动 debug）：定时把机器状态采一遍，把问题清单推给界面。
+   * auto = 是否定时跑；intervalMin = 间隔（分钟）；
+   * notify = 出现「新的严重问题」时弹系统通知（老问题不重复打扰）。
+   */
+  debug: { auto: true, intervalMin: 10, notify: true },
   display: {
     mode: 'window',          // window（竖屏窗口，可自由拉伸） | fullscreen（自动适配屏幕）
     portrait: '900x1600',    // 窗口模式的竖屏分辨率，可在设置里调大小

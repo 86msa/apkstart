@@ -1,4 +1,4 @@
-# Microsoft Store 提交材料（ApkStart 0.5.9）
+# Microsoft Store 提交材料（ApkStart 0.6.0）
 
 > 这份文件是给 Partner Center 表单直接复制用的。包体、图标、清单由脚本产出，
 > 只有「注册账号 → 预留名称 → 上传 → 送审」必须在网页上人工完成。
@@ -12,7 +12,7 @@
 | Product name | `ApkStart` |
 | Category | Developer tools → Utilities & tools（备选：Productivity） |
 | Price | Free |
-| Package | `dist/store/ApkStart_0.5.9.0_x64.msix`（x64，约 850 MB） |
+| Package | `dist/store/ApkStart_0.6.0.0_x64.msix`（x64，约 850 MB） |
 | 支持语言 | 简体中文 / English (United States) |
 | 官网 | https://github.com/RoutineMiku/apkstart |
 | 支持邮箱 | <!-- 填你的邮箱 --> |
@@ -22,7 +22,14 @@
 
 **中文**
 ```
-0.5.9：
+0.6.0：
+· 设置页重新分类：按「常用与安装 / 显示与窗口 / 操作与输入 / 性能与资源 / 网络与下载 / 诊断与修复 / 集成与文件 / 更新与关于」八类归置，找设置项不再靠长列表翻。
+· 设置页新增搜索框，输入「横屏」「内存」「代理」等关键词即可直达对应设置项。
+· 新增「自动检测」：后台定时体检安卓运行时、adb 授权、磁盘余量、数据分区、快照与设置冲突，出问题按分类列出并可一键处理。
+· 自动检测只在发现新问题时提醒一次，修复后自动复检；可随时关闭或调整检测间隔。
+· 修复部分电脑「装完点应用没反应、所有应用都打不开」：安装包漏带解压组件、或系统镜像下载被截断，都会让安卓开不了机。现在打包会强制带上解压组件并校验镜像完整性；已经展开过可用镜像的电脑不会再重复解压。
+
+0.5.9（已包含）：
 · 修复红果免费短剧等应用无法横屏：标题栏旋转、托盘菜单、Ctrl+R 现在统一走同一套方向决策，横屏覆盖优先于应用自带的方向声明。
 · 镜像里的「自动旋转」开关默认打开，可在设置里关闭；画面方向仍由屏幕方向策略决定，不会被传感器带歪。
 · 默认回到带旋转按钮的嵌入窗口（更好看的自定义标题栏），可在设置里随时切回模拟器原生独立窗口，两种模式都保留。
@@ -77,7 +84,14 @@
 
 **English**
 ```
-0.5.9:
+0.6.0:
+· Settings are now organized into eight categories (Essentials & Install, Display & Window, Input, Performance & Resources, Network & Downloads, Diagnostics & Fixes, Files & Integration, Updates & About) — no more hunting through one long list.
+· New search box in Settings: type "landscape", "memory", "proxy" and jump straight to the matching setting.
+· New "Auto diagnostics": the app periodically checks the Android runtime, adb authorization, free disk space, the data partition, snapshots and conflicting settings, then lists any problem by category with a one-click fix.
+· Auto diagnostics only notifies you when a new problem appears, re-checks itself after every fix, and can be switched off or rescheduled at any time.
+· Fixed "clicking an app does nothing / no app will start" on some PCs: a package missing the decompression module, or a truncated system-image download, prevented Android from booting. Packaging now always bundles the module and verifies image integrity, and PCs that already have a usable expanded image no longer re-extract it.
+
+0.5.9 (included):
 · Fixed landscape mode for 红果 (Fanqie) short-video app and similar: the title-bar rotate button, tray menu and Ctrl+R now share one orientation decision; per-app landscape override takes priority over the app's own declared orientation.
 · The in-image "auto-rotate" switch is now on by default and can be turned off in Settings; screen orientation is still decided by the orientation policy, never by the sensor.
 · Restored the nicer embedded window with the custom title bar and rotate button as the default; you can switch back to the emulator's native standalone window anytime in Settings — both modes remain available.
@@ -335,7 +349,7 @@ Notes:
    ```powershell
    node build/msix.js --identity "<Identity/Name>" --publisher "<Identity/Publisher>"
    ```
-4. **Packages** → 上传 `dist/store/ApkStart_0.5.9.0_x64.msix`，等待校验通过。
+4. **Packages** → 上传 `dist/store/ApkStart_0.6.0.0_x64.msix`，等待校验通过。
 5. **Store listing** → 填第 2–5 节的内容、上传截图、选分类。
 6. **Pricing and availability** → Free，市场选中国 + 全球。
 7. **Submission options** → 粘贴第 6 节的 certification notes。

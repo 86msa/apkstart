@@ -2632,6 +2632,34 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(/this\._lastNetwork = null/.test(stopBody), 'stop 要清掉网络缓存');
   });
 
+  await test('打包必须带上生产依赖（否则 @napi-rs/lzma 缺失、镜像展不开、应用全打不开）', () => {
+    const root = path.join(__dirname, '..');
+    const packJs = fs.readFileSync(path.join(root, 'build', 'pack.js'), 'utf8');
+    const pkg = require(path.join(root, 'package.json'));
+
+    // 0.5.9 的致命回归：pack.js 只复制 src/，没带 node_modules，
+    // 打包版一启动就 Cannot find module '@napi-rs/lzma'，所有应用都打不开。
+    assert(pkg.dependencies && pkg.dependencies['@napi-rs/lzma'],
+      '@napi-rs/lzma 必须在 dependencies 里（解压 system.img.xz 需要）');
+    assert(/node_modules/.test(packJs) && /dependencies/.test(packJs),
+      'pack.js 要按 package.json 的 dependencies 复制生产依赖');
+    assert(/startsWith\('@'\)/.test(packJs),
+      '作用域包要连整个 scope 一起复制（原生二进制在 @napi-rs/*-win32-x64-msvc）');
+    // 解压路径上真要能找到它：本地 node_modules 里必须装好
+    const lzmaDir = path.join(root, 'node_modules', '@napi-rs', 'lzma');
+    assert(fs.existsSync(lzmaDir), '本机要装好 @napi-rs/lzma 才能打包');
+  });
+
+  await test('镜像解压缺 lzma 时给可读错误，而不是一长串 require stack', () => {
+    const root = path.join(__dirname, '..');
+    const provJs = fs.readFileSync(path.join(root, 'src', 'core', 'provision.js'), 'utf8');
+    assert(/LZMA_MISSING/.test(provJs), '缺 lzma 要用 LZMA_MISSING 错误码');
+    assert(/安装包不完整/.test(provJs), '错误文案要直说安装包不完整，别让用户以为电脑坏了');
+    // 不能再是无保护的 require.resolve：那会在缺依赖时抛原始模块错误
+    assert(/try\s*\{[^}]*require\.resolve\('@napi-rs\/lzma'\)/.test(provJs),
+      'require.resolve 要包在 try 里，失败时给友好错误');
+  });
+
   console.log(results.join('\n'));
   console.log(`\n结果：${passed} 通过，${failed} 失败\n`);
   try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (_) { /* ignore */ }

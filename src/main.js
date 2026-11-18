@@ -809,6 +809,83 @@ function send(channel, payload) {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
 }
 
+// ---------------- 自动检测（自动 debug）----------------
+
+/**
+ * 自动检测 = 定时把机器的真实状态采一遍，按「问题清单」推给界面。
+ *
+ * 三条原则（都是被踩过的坑换来的）：
+ *  1) 采集与判定分离：采集在 src/core/autodebug-probe.js（会调系统命令），
+ *     判定在 src/core/autodebug.js（纯函数，可单测）。
+ *  2) 探测失败 ≠ 有问题：拿不到状态就留空，判定层当「不知道」，
+ *     绝不为了「有东西可报」而编一条出来。误报一次，用户就不信了。
+ *  3) 只在「新问题出现」时打扰用户：老问题已经提示过，
+ *     每轮都弹窗就是噪音；恢复了也只静默记账。
+ */
+let autodebugState = { issues: [], summary: null, at: 0, running: false };
+let autodebugTimer = null;
+let autodebugBusy = false;
+
+function autodebugConfig() {
+  const d = (store.getSettings() || {}).debug || {};
+  const intervalMin = Number(d.intervalMin);
+  return {
+    auto: d.auto !== false,
+    intervalMin: [1, 5, 10, 30, 60].includes(intervalMin) ? intervalMin : 10,
+    notify: d.notify !== false,
+  };
+}
+
+async function runAutodebug({ force = false } = {}) {
+  if (autodebugBusy) return autodebugState;
+  const cfg = autodebugConfig();
+  if (!force && !cfg.auto) return autodebugState;
+  autodebugBusy = true;
+  send('autodebug:state', { ...autodebugState, running: true });
+  try {
+    const autodebug = require('./core/autodebug');
+    const probe = require('./core/autodebug-probe');
+    const obs = await probe.collect({ runtime, store, doctor: require('./core/doctor') });
+    const issues = autodebug.evaluate(obs);
+    const summary = autodebug.summarize(issues);
+    const { added } = autodebug.diff(autodebugState.issues, issues);
+    autodebugState = { issues, summary, at: Date.now(), running: false };
+    send('autodebug:state', autodebugState);
+    if (cfg.notify) {
+      // 只有「新的 error」才提醒：warn/info 留给设置页自己看，不打断用户。
+      const fresh = added.filter((i) => i.severity === 'error');
+      if (fresh.length) {
+        const text = fresh.map((i) => i.title).join('；');
+        send('toast', { type: 'error', message: `自动检测发现新问题：${text}（设置 → 诊断与修复）` });
+        notify('自动检测发现新问题', `${text}。打开 ApkStart 的「设置 → 诊断与修复」可以一键处理。`);
+        appLog(`autodebug new issues: ${fresh.map((i) => i.code).join(',')}`);
+      }
+    }
+    return autodebugState;
+  } catch (e) {
+    // 检测本身失败不能影响主流程：记一条日志，下一轮再试。
+    appLog(`autodebug failed: ${e && e.message}`);
+    autodebugState = { ...autodebugState, running: false, error: String((e && e.message) || e) };
+    send('autodebug:state', autodebugState);
+    return autodebugState;
+  } finally {
+    autodebugBusy = false;
+  }
+}
+
+function scheduleAutodebug() {
+  if (autodebugTimer) {
+    clearInterval(autodebugTimer);
+    autodebugTimer = null;
+  }
+  const cfg = autodebugConfig();
+  if (!cfg.auto) return;
+  autodebugTimer = setInterval(() => {
+    runAutodebug().catch(() => {});
+  }, cfg.intervalMin * 60 * 1000);
+  if (autodebugTimer.unref) autodebugTimer.unref();
+}
+
 // ---------------- 托盘 ----------------
 
 function buildTray() {
@@ -1788,6 +1865,59 @@ function registerIpc() {
     return { issues, accel, free };
   });
 
+  // ---------------- 自动检测（自动 debug）----------------
+
+  /** 立即跑一次检测（设置页「立即检测」按钮 / 定时任务都走这里） */
+  ipcMain.handle('autodebug:run', () => runAutodebug({ force: true }));
+
+  /** 取上一次的结果（打开设置页时先渲染旧的，别让界面空着等） */
+  ipcMain.handle('autodebug:state', () => autodebugState);
+
+  /** 开关与间隔 */
+  ipcMain.handle('autodebug:config', (_e, patch = {}) => {
+    const cur = autodebugConfig();
+    const next = {
+      auto: patch.auto === undefined ? cur.auto : !!patch.auto,
+      intervalMin: patch.intervalMin === undefined ? cur.intervalMin : Number(patch.intervalMin) || cur.intervalMin,
+      notify: patch.notify === undefined ? cur.notify : !!patch.notify,
+    };
+    store.saveSettings({ debug: next });
+    scheduleAutodebug();
+    if (next.auto) runAutodebug().catch(() => {});
+    return next;
+  });
+
+  /** 清残留的孤儿模拟器进程（emulator.exe 只是启动器，qemu 是 detached 的） */
+  ipcMain.handle('app:clearOrphans', async () => {
+    try {
+      const r = await runtime.killOrphanEmulators({ onLog: (m) => appLog(`orphan: ${m}`) });
+      return { ok: true, note: r && r.note };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  /** 作废快速启动快照（快照坏了会导致每次开机都白等一次冷启动） */
+  ipcMain.handle('app:clearSnapshot', async () => {
+    try {
+      const ok = runtime.emulator.invalidateSnapshot();
+      return { ok: !!ok };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  /** 重启运行时：自愈 unauthorized / 引导卡死 / 孤儿锁的首选动作 */
+  ipcMain.handle('runtime:restart', async () => {
+    try {
+      await runtime.stop({ onLog: (m) => appLog(`restart-stop: ${m}`) }).catch(() => {});
+      const r = await runtime.ensure({ onLog: (m) => send('runtime:log', m) });
+      return { ok: true, ready: !!r };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
   // 微软 VC++ 2015-2022 x64 运行库：安卓模拟器（Qt6）与 qemu 都依赖它。
   // 缺了在「其他电脑」上会直接起不来（0xc0000135 / MSVCP140 缺失）。
   function vcRedistInstaller() {
@@ -2712,6 +2842,12 @@ if (!gotLock) {
     createWindow({ show: !parseArgs(process.argv).silent });
     buildTray();
     applyAutoStart();
+
+    // 自动检测：先排上定时任务，启动 25 秒后再跑第一轮。
+    // 延后是因为刚开机时 adb / 磁盘 / 快照都还在就位过程中，
+    // 这时候采到的状态最容易误判（例如「没看到设备」其实只是还没引导完）。
+    scheduleAutodebug();
+    setTimeout(() => { runAutodebug().catch(() => {}); }, 25000).unref?.();
 
     // 老版本安装的应用没有 orientation 字段（那时还没这个功能）。
     // 不补的话「跟随应用」对它们只能退回「当前面板方向」，红果这类竖屏应用
