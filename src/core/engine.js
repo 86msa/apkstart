@@ -358,9 +358,15 @@ class Runtime {
       let authHealed = false;  // 本次 start() 是否已因「未授权」作废旧快照冷启动过
       const diagUnauthorized = () => ({
         code: 'ADB_UNAUTHORIZED',
-        title: '安卓调试授权未完成（授权对话框）',
-        hint: '系统卡在「允许 USB 调试？」对话框，已自动作废旧快照并冷启动一次让运行时'
-          + '重新注入 adb 公钥。若反复出现，请删除 %USERPROFILE%\\.android\\adbkey* 后重试。',
+        title: '安卓调试授权未完成（需要点一次「允许」）',
+        // 旧文案让人去删 %USERPROFILE%\.android\adbkey —— 实测那是**反向操作**：
+        // 换了新密钥后，系统里已存的旧公钥仍然生效，两者对不上，反而永远授权不了
+        // （Android 只在 adb_keys 不存在时才写入新公钥）。正确做法是在模拟器窗口里
+        // 点一次「允许」，或者清空安卓数据让系统重建授权表。
+        hint: '模拟器停在「允许 USB 调试？」对话框。请在那个模拟器窗口里点「允许」——'
+          + '勾选「一律允许使用这台计算机进行调试」再点，之后就不会再问。'
+          + '若窗口点不动或一直不出现：设置 → 运行时 → 清空安卓数据后重试'
+          + '（会清掉已装应用，重新安装即可，不会影响 APK 文件）。',
       });
       const probe = async ({ serial }) => {
         if (!this.emulator.running()) return 'fatal';
