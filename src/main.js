@@ -2772,6 +2772,16 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     store.ensureDirs();
+    /**
+     * 记下「当前是谁在管这台运行时」。
+     *
+     * 用途见下方的 releaseRuntime()：用户点了应用没反应会再点一次，旧实例这时
+     * 正在退出（单实例锁已经释放），新实例接管模拟器并开始启动应用；旧实例的
+     * 收尾却照样 runtime.dispose()，于是新实例拿到 `device 'emulator-5554' not found`。
+     * 表现就是「点两次之后应用彻底打不开」。新实例一启动就覆盖这个文件，
+     * 旧实例收尾时看到 pid 不是自己就跳过停止运行时。
+     */
+    try { fs.writeFileSync(path.join(store.DATA_DIR, 'owner.pid'), String(process.pid)); } catch (_) { /* ignore */ }
     // Windows 任务栏身份（AppUserModelID）
     // 不设的话 Windows 只能按 exe 路径猜身份：任务栏固定项、跳转列表、通知来源
     // 都会落到 "Electron" 上 —— 用户看到的就是「图标/名字是默认的那个」。
@@ -3218,6 +3228,27 @@ if (!gotLock) {
   });
 
   let quitReady = false;
+  /**
+   * 只在「运行时还归我管」时才停掉它。
+   *
+   * 双实例交替是真实场景：用户点应用没反应 → 再点一次。第二次启动时第一次
+   * 已经释放了单实例锁但还没退干净，新实例接管了模拟器并开始 am start；
+   * 旧实例随后执行 dispose()，把新实例正在用的模拟器一起杀掉 ——
+   * 日志里就是「运行时已退出（code=0）」紧跟「device 'emulator-5554' not found」。
+   * owner.pid 由每次启动覆盖，所以谁最后启动谁才是主人。
+   */
+  const releaseRuntime = () => {
+    let mine = true;
+    try {
+      const owner = Number(String(fs.readFileSync(path.join(store.DATA_DIR, 'owner.pid'), 'utf8')).trim());
+      mine = !owner || owner === process.pid;
+    } catch (_) { mine = true; }
+    if (mine) {
+      runtime?.dispose();
+    } else {
+      appLog('另一个实例已接管运行时，跳过停止（否则会误杀它的模拟器）');
+    }
+  };
   app.on('before-quit', (e) => {
     quitting = true;
     appLog(`before-quit ready=${quitReady}`);
@@ -3234,7 +3265,7 @@ if (!gotLock) {
       const finish = () => {
         try { winAgent?.dispose(); } catch (_) { /* ignore */ }
         try { wheelRouter?.dispose(); } catch (_) { /* ignore */ }
-        runtime?.dispose();
+        releaseRuntime();
         // 隐藏的图标解码窗口也算一个窗口，不关掉会让 window-all-closed 永远不触发
         try { if (decodeWindow && !decodeWindow.isDestroyed()) decodeWindow.destroy(); } catch (_) { /* ignore */ }
         app.quit();
@@ -3244,7 +3275,7 @@ if (!gotLock) {
     }
     try { winAgent?.dispose(); } catch (_) { /* ignore */ }
     try { wheelRouter?.dispose(); } catch (_) { /* ignore */ }
-    runtime?.dispose();
+    releaseRuntime();
     try { if (decodeWindow && !decodeWindow.isDestroyed()) decodeWindow.destroy(); } catch (_) { /* ignore */ }
   });
 }

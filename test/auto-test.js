@@ -2768,6 +2768,29 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(/resources\[\\\\\/\]runtime\$/.test(mainJs), '按 resources/runtime 结尾判定');
   });
 
+  await test('双实例交替：旧实例退出不能杀掉新实例刚接管的模拟器', () => {
+    const root = path.join(__dirname, '..');
+    const mainJs = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+    // 用户「点了没反应再点一次」时，第二次启动会接管模拟器；旧实例的收尾如果
+    // 照样 dispose()，新实例立刻拿到 device not found —— 应用彻底打不开。
+    assert(/owner\.pid/.test(mainJs), '启动时要记下自己是不是运行时的主人');
+    assert(/const releaseRuntime = /.test(mainJs), '要有「运行时归属」判定');
+    const fn = mainJs.slice(mainJs.indexOf('const releaseRuntime'), mainJs.indexOf('const releaseRuntime') + 800);
+    assert(/owner === process\.pid/.test(fn), 'pid 不是自己时不能停运行时');
+    const hits = (mainJs.match(/runtime\?\.dispose\(\)/g) || []).length;
+    assert(hits === 1, `运行时只应在 releaseRuntime 里停一次，实际 ${hits} 处`);
+  });
+
+  await test('窗口代理：从目录联接启动时也要认得出模拟器窗口', () => {
+    const root = path.join(__dirname, '..');
+    const agentJs = fs.readFileSync(path.join(root, 'src', 'core', 'agent.js'), 'utf8');
+    // 代理按进程 exe 路径前缀判断归属，Windows 给的是解析 junction 后的真实路径；
+    // 不解析就会 emu:0 → 原生窗口接管失败 → 退回带旋转按钮的嵌入壳。
+    assert(/realpathSync\.native/.test(agentJs), 'scope 目录要先解析成真实路径');
+    const scope = agentJs.slice(agentJs.indexOf('async scope('), agentJs.indexOf('async scope(') + 1200);
+    assert(/list\.push\(d\)/.test(scope), '原路径也要保留，兼容少数环境');
+  });
+
   console.log(results.join('\n'));
   console.log(`\n结果：${passed} 通过，${failed} 失败\n`);
 
