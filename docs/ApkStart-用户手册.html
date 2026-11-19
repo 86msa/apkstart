@@ -183,7 +183,9 @@ ApkStart.exe --launch &lt;包名&gt;
 <ol><li>安装时若报 <code>NO_MATCHING_ABIS</code>，自动切换兼容镜像 → 重启运行时 → 把已装应用从本地 APK 备份重新灌回去 → 重新安装（见日志"正在切换到兼容镜像并重启运行时…"）。</li><li>若应用启动崩溃且日志明确指向 ARM 翻译层（如 <code>DoBadTrampoline</code>），自动切到 Android 14 兼容镜像重试（日志"检测到 ARM 翻译层崩溃，正在自动切换兼容镜像…"）。</li></ol>
 <p><strong>你需要做的：</strong></p>
 <ul><li><strong>耐心等</strong>：切换镜像会重启运行时，一次约 40 秒到 1 分钟，期间可能看到提示窗口。</li><li><strong>确认镜像已就位</strong>：设置 → 常用与安装 → 运行时，看「通用兼容镜像（自动管理）」状态；若显示未下载，点「下载兼容镜像」（约 1.5 GB），完成后<strong>重启运行时</strong>生效。</li><li><strong>仍是闪退</strong>：少数应用自带更深的反模拟检测（强制校验真实传感器、基带等），无法在模拟器里运行；这类应用会给出中文说明，属于限制，不是故障。</li></ul>
-<blockquote>实测：红果免费短剧（com.phoenix.read，arm64-v8a-only）在 Android 14 镜像 + 新版翻译层下可正常安装、进入推荐流并播放视频。</blockquote>
+<p><strong>看到「红色『安装失败』+ 文案却说『正在自动切换兼容镜像后重试』」怎么办？</strong></p>
+<p>这是旧版的一个显示错误：镜像文件明明在磁盘上，但复用到一台没开翻译层的旧运行时，切换重试被跳过、直接报了失败，提示文案却照旧说"正在重试"。<strong>你用的不是最新代码，请升级到 0.6.1 的最新构建</strong>（本手册对应的版本已修复：安装前先探测当前运行时的真实翻译能力，不再只看镜像文件在不在；<code>NO_MATCHING_ABIS</code> 一定触发切换+重启+清旧快照后重装；二次仍失败会如实告知，不再谎称"正在重试"）。升级后再装一次即可。</p>
+<blockquote>实测：红果免费短剧（com.phoenix.read，arm64-v8a-only）在 Android 14 镜像 + 新版翻译层下可正常安装、进入推荐流并播放视频。当前运行时 <code>ro.product.cpu.abilist</code> = <code>x86_64,arm64-v8a</code>，翻译层已生效。</blockquote>
 <hr/>
 <h3 id="6-4-adb-未授权-允许-usb-调试">6.4 adb 未授权（允许 USB 调试）</h3>
 <p><strong>症状</strong>：诊断里报"adb 未授权"或"安卓调试授权未完成"，<code>adb devices</code> 显示 <code>unauthorized</code>，应用一直起不来。</p>
