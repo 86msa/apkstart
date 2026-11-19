@@ -7,8 +7,12 @@ import os
 import re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
 SRC = os.path.join(HERE, 'USER-MANUAL.md')
 OUT = os.path.join(HERE, 'ApkStart-用户手册.html')
+# 0.6.2 起手册内嵌进软件：同一份 HTML 也要落到 src/ui，随包分发。
+# 主进程打开的就是这一份，绝不依赖 docs/ 或外部文件。
+APP_OUT = os.path.join(ROOT, 'src', 'ui', 'manual.html')
 
 with open(SRC, encoding='utf-8') as f:
     lines = f.read().split('\n')
@@ -161,6 +165,8 @@ aside{position:sticky;top:0;height:100vh;overflow:auto;width:280px;flex:0 0 280p
 aside h2{font-size:15px;margin:0 0 14px;letter-spacing:.5px}
 aside a{display:block;color:var(--mut);text-decoration:none;padding:3px 8px;border-radius:6px;font-size:13.5px;line-height:1.45}
 aside a:hover{background:var(--accent-soft);color:var(--accent)}
+#tocSearch{width:100%;margin-bottom:12px;padding:7px 9px;border:1px solid var(--line);border-radius:6px;font:13px/1.4 inherit;background:#fff;color:var(--fg)}
+#tocSearch:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
 .toc-l3{padding-left:22px!important;font-size:12.5px!important;color:#8c959f!important}
 main{flex:1;min-width:0;padding:40px 48px 80px}
 h1{font-size:30px;margin:0 0 8px;padding-bottom:16px;border-bottom:2px solid var(--line)}
@@ -192,20 +198,37 @@ tbody tr:nth-child(even){background:#fbfcfd}
 <body>
 <div class="wrap">
 <aside><h2>目录</h2>
-__TOC__
+<input id="tocSearch" type="search" placeholder="筛选目录（Ctrl+F 全文搜索）" autocomplete="off" />
+<div id="tocList">__TOC__</div>
 </aside>
 <main>
 __BODY__
 </main>
 </div>
 <div class="btnbar"><button onclick="window.print()">打印 / 存为 PDF</button></div>
+<script>
+(function () {
+  var input = document.getElementById('tocSearch');
+  var links = Array.prototype.slice.call(document.querySelectorAll('#tocList a'));
+  if (!input) return;
+  input.addEventListener('input', function () {
+    var q = input.value.trim().toLowerCase();
+    links.forEach(function (a) { a.hidden = !!q && a.textContent.toLowerCase().indexOf(q) < 0; });
+  });
+  // 自动教程按锚点打开时，把命中的目录项滚进视野
+  if (location.hash) {
+    var hit = document.getElementById(decodeURIComponent(location.hash.slice(1)));
+    if (hit) setTimeout(function () { hit.scrollIntoView({ block: 'start' }); }, 80);
+  }
+}());
+</script>
 </body>
 </html>
 '''
 
 doc = doc.replace('__TOC__', toc_html).replace('__BODY__', body)
-with open(OUT, 'w', encoding='utf-8') as f:
-    f.write(doc)
-
-print('生成:', OUT)
-print('大小: %d KB' % (os.path.getsize(OUT) // 1024))
+for target in (OUT, APP_OUT):
+    with open(target, 'w', encoding='utf-8') as f:
+        f.write(doc)
+    print('生成:', target)
+    print('大小: %d KB' % (os.path.getsize(target) // 1024))
