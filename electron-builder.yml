@@ -10,6 +10,9 @@ directories:
 asar: false
 files:
   - src/**/*
+  # 随包资源：PinyinIME.apk（中文输入法，开机时静默装进安卓）。
+  # 以前漏了这一项：便携版（build/pack.js）带了，安装版却没有，打开中文输入法会报「输入法 APK 缺失」。
+  - assets/**/*
   - package.json
   - LICENSE
   - "!**/*.map"
@@ -70,7 +73,6 @@ appx:
   languages:
     - zh-CN
     - en-US
-  - ar
   minVersion: 10.0.19041.0
   maxVersionTested: 10.0.22621.0
 

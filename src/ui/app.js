@@ -152,7 +152,7 @@ function renderGrid() {
           ? `<img src="${esc(a.iconUrl)}" alt="" draggable="false" />`
           : `<div class="fallback" style="background:${esc(a.accent || '#9aa6b2')}">${esc(initialOf(a.label))}</div>`}
       </div>
-      <div class="name">${esc(a.label)}</div>
+      <div class="name" data-i18n-skip>${esc(a.label)}</div>
       <div class="meta">${a.running ? __('运行中') : `v${esc(a.versionName)}${a.lastLaunchAt ? ' · ' + relTime(a.lastLaunchAt) : ''}`}</div>
       <div class="open-hint">${a.running ? __('切换到前台') : __('打开')}</div>
     </div>
@@ -1056,12 +1056,17 @@ function fillSettings(s) {
   if ($('setDataGB')) $('setDataGB').value = String(Number(eng.dataPartitionGB || 0));
   if ($('setFastDns')) $('setFastDns').checked = eng.fastDns !== false;
   if ($('setLocale')) {
-    // 没手动选过时，阿拉伯语界面下安卓默认也是阿拉伯语（与 emulator.resolveGuestLocale 一致）
-    const autoAr = !eng.localeChosen && (eng.locale || 'zh-CN') === 'zh-CN' && window.I18N && I18N.language === 'ar';
-    $('setLocale').value = autoAr ? 'ar' : (eng.locale || 'zh-CN');
+    // 没手动选过时，阿拉伯语界面下安卓默认用英文（与 emulator.resolveGuestLocale 一致）
+    const autoEn = !eng.localeChosen && (eng.locale || 'zh-CN') === 'zh-CN' && window.I18N && I18N.language === 'ar';
+    $('setLocale').value = autoEn ? 'en-US' : (eng.locale || 'zh-CN');
   }
   if ($('setUiLanguage')) $('setUiLanguage').value = (state.settings && state.settings.uiLanguage) || 'auto';
-  if ($('setChineseIme')) $('setChineseIme').checked = eng.chineseIme !== false;
+  if ($('setChineseIme')) {
+    // 与 engine.prepare 的判断一致：阿拉伯语界面下没手动打开过就不装拼音输入法，开关也显示为关
+    const zhGuest = !!eng.localeChosen && /^zh/i.test(eng.locale || '');
+    const arUi = window.I18N && I18N.language === 'ar';
+    $('setChineseIme').checked = eng.chineseIme !== false && (!arUi || zhGuest || eng.chineseImeChosen === true);
+  }
   if ($('setKeepSnapshot')) $('setKeepSnapshot').checked = eng.keepSnapshot !== false;
   $('setDisplayMode').value = d.mode === 'fullscreen' ? 'fullscreen' : 'window';
   if ($('setAutoFullscreen')) $('setAutoFullscreen').value = d.autoFullscreenOnLaunch === true ? 'on' : 'off';

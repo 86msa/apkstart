@@ -1563,6 +1563,7 @@
     "跟随系统 · Auto": "حسب لغة النظام · Auto",
     "切换后界面立即刷新。少数系统通知文字在下次启动 ApkStart 后切换。": "تُحدَّث الواجهة فور التغيير. وبعض نصوص إشعارات النظام تتغيّر عند تشغيل ApkStart في المرة القادمة.",
     "简体中文": "简体中文",
+    "العربية（实验性）": "العربية (تجريبية)",
   };
   if (typeof module === 'object' && module.exports) module.exports = d;
   else if (root && root.I18N) root.I18N.register('ar', d);

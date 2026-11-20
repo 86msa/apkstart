@@ -88,9 +88,15 @@
   const CJK = /[　-〿一-鿿＀-￯]/;
   const ATTRS = ['title', 'placeholder', 'aria-label', 'alt', 'data-tip', 'data-title', 'label'];
 
+  /** 应用名等用户数据不翻译：所在元素（或祖先）带 data-i18n-skip */
+  function skipped(node) {
+    const el = node.nodeType === 1 ? node : node.parentElement;
+    return !!(el && el.closest && el.closest('[data-i18n-skip]'));
+  }
+
   function translateText(node) {
     const raw = node.nodeValue;
-    if (!raw || !CJK.test(raw) || !dict) return;
+    if (!raw || !CJK.test(raw) || !dict || skipped(node)) return;
     const key = normText(raw);
     const v = dict[key];
     if (typeof v !== 'string' || !v) return;
@@ -101,7 +107,7 @@
   }
 
   function translateEl(el) {
-    if (!dict || !el.getAttribute) return;
+    if (!dict || !el.getAttribute || skipped(el)) return;
     for (const a of ATTRS) {
       const raw = el.getAttribute(a);
       if (!raw || !CJK.test(raw)) continue;

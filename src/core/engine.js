@@ -720,11 +720,14 @@ class Runtime {
     const fs = require('fs');
     const path = require('path');
     const want = String(locale || 'zh-CN');
-    if (want === 'off' || want === 'en-US') return;
+    if (want === 'off') return;
     // 已经生效（system_locales 是目标语言，或语言列表里第一项是它）
     const cur = await client.shell('settings get system system_locales', { timeout: 8000 }).catch(() => '');
     const s = String(cur).trim();
     if (s === want || s.indexOf(want) === 0 || (/^zh/i.test(want) && /^zh[-_]/.test(s))) return;
+    // en-US 是镜像原生语言：没改过时 system_locales 是空 / null，也算已经生效。
+    // 之前切成过别的语言（例如阿拉伯语）才需要纠正回来。
+    if (want === 'en-US' && (!s || s === 'null' || /^en[-_]/i.test(s))) return;
     const marker = path.join(store.DATA_DIR, 'locale-' + want.replace(/[^a-zA-Z0-9_-]/g, '_') + '.done');
     if (fs.existsSync(marker)) return;
     try {

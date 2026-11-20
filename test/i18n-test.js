@@ -105,10 +105,11 @@ test('主进程按 ?lang= 把语言传给每个页面，设置页有界面语言
   assert.ok(/id="setUiLanguage"[\s\S]{0,200}value="ar"/.test(html));
 });
 
-test('安卓系统语言：未手动选择时跟随阿拉伯语界面', () => {
+test('安卓系统语言：阿拉伯语界面下默认英文（避免阿拉伯-印度数字打乱解析）', () => {
   const { resolveGuestLocale } = require('../src/core/emulator');
   i18n.setLanguage('ar');
-  assert.equal(resolveGuestLocale({ locale: 'zh-CN' }), 'ar');
+  assert.equal(resolveGuestLocale({ locale: 'zh-CN' }), 'en-US');
+  assert.equal(resolveGuestLocale({ locale: 'ar', localeChosen: true }), 'ar', '手动选阿拉伯语仍然生效');
   assert.equal(resolveGuestLocale({ locale: 'zh-CN', localeChosen: true }), 'zh-CN', '用户手动选过就听用户的');
   assert.equal(resolveGuestLocale({ locale: 'off' }), '');
   i18n.setLanguage('zh-CN');

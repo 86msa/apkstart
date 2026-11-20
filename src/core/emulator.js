@@ -239,6 +239,18 @@ class EmulatorEngine {
     let locks = [];
     try { locks = fs.readdirSync(avdDir).filter((f) => /\.lock$/i.test(f)); } catch (_) { locks = []; }
     if (!locks.length) return 0;
+    // 锁里记着的 qemu pid 还活着时，不管端口有没有在监听都必须先结束它：
+    // 开机早期（或软件模拟慢启动）qemu 还没开端口，但已经占住了 AVD 锁，
+    // 以前这里只看端口 → 判成「残留目录」→ 下一轮立刻 FATAL
+    // "Running multiple emulators with the same AVD"（用户诊断报告里第 3 轮就是这样）。
+    const lockPid = this._lockPid(avdDir);
+    if (lockPid && lockPid !== process.pid && pidAlive(lockPid)) {
+      onLog(__('清理 {0} 个残留模拟器进程', 1));
+      await new Promise((r) => {
+        execFile('taskkill', ['/PID', String(lockPid), '/T', '/F'], { windowsHide: true }, () => r());
+      });
+      await waitPidGone(lockPid, 8000);
+    }
     if (!(await this._anyEmulatorPortAlive())) {
       this.clearLocks(avdDir);
       return 0;
@@ -281,6 +293,17 @@ class EmulatorEngine {
     await sleep(1200);
     this.clearLocks(avdDir);
     return pids.size;
+  }
+
+  /** hardware-qemu.ini.lock/pid 里 emulator 自己写的 qemu pid；没有返回 0 */
+  _lockPid(avdDir) {
+    try {
+      const f = path.join(avdDir, 'hardware-qemu.ini.lock', 'pid');
+      if (fs.existsSync(f) && fs.statSync(f).isFile()) {
+        return parseInt(fs.readFileSync(f, 'utf8').trim(), 10) || 0;
+      }
+    } catch (_) { /* ignore */ }
+    return 0;
   }
 
   /** 5554~5620 里是否有 emulator 控制台端口在监听（连接被拒会立刻返回，代价极小） */
@@ -899,7 +922,17 @@ class EmulatorEngine {
     if (proc) {
       try { proc.kill(); } catch (_) { /* ignore */ }
       if (process.platform === 'win32' && proc.pid) {
-        try { spawn('taskkill', ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); } catch (_) { /* ignore */ }
+        // 要等 taskkill 真的结束再往下走：以前是「发出去就不管」，下一轮冷启有时
+        // 赶在旧进程退出前就开始，被 AVD 锁挡成 FATAL。
+        await new Promise((r) => {
+          try {
+            const k = spawn('taskkill', ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+            k.on('exit', () => r());
+            k.on('error', () => r());
+            setTimeout(r, 5000);
+          } catch (_) { r(); }
+        });
+        await waitPidGone(proc.pid, 5000);
       }
     }
     await sleep(800);
@@ -1686,16 +1719,35 @@ class EmulatorEngine {
   }
 }
 
+/** 进程是否还活着（signal 0 只做存在性检查，不会真的发信号） */
+function pidAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (e) { return e && e.code === 'EPERM'; }
+}
+
+/** 等某个进程退出，最多 ms 毫秒 */
+async function waitPidGone(pid, ms) {
+  const end = Date.now() + ms;
+  while (Date.now() < end && pidAlive(pid)) {
+    // eslint-disable-next-line no-await-in-loop
+    await sleep(250);
+  }
+}
+
 /**
  * 安卓系统语言（-change-locale 的值）。
  * 用户在设置里明确选过（engine.localeChosen）就用他选的；没选过时跟随界面语言：
- * 阿拉伯语界面默认把安卓也切成阿拉伯语，其余保持默认的简体中文。
+ * 阿拉伯语界面默认用镜像原生的英文（en-US），其余保持默认的简体中文。
+ *
+ * 为什么阿拉伯语界面不默认把安卓也切成阿拉伯语：阿拉伯语 locale 下安卓的
+ * String.format 会输出阿拉伯-印度数字（٠١٢），而 ApkStart 要用 \d 解析
+ * wm size / wm density / dumpsys 的输出，解析失败会让分辨率、密度校正反复重来。
+ * 想要阿拉伯语安卓可以在设置里手动选（标为实验性）。
  * 'off' / 'false' / 空 = 不注入，保持镜像原生英文。
  */
 function resolveGuestLocale(engine) {
   const e = engine || {};
   let v = String(e.locale || 'zh-CN').trim();
-  if (!e.localeChosen && v === 'zh-CN' && require('../i18n').language === 'ar') v = 'ar';
+  if (!e.localeChosen && v === 'zh-CN' && require('../i18n').language === 'ar') v = 'en-US';
   if (!v || v === 'off' || /^false$/i.test(v)) return '';
   return v;
 }
