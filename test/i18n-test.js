@@ -48,7 +48,9 @@ test('阿拉伯语：翻译 + 占位符替换 + RTL', () => {
   i18n.setLanguage('ar');
   assert.equal(i18n.dir, 'rtl');
   assert.equal(i18n.t('安装 APK'), 'تثبيت APK');
-  assert.match(i18n.t('{0} 个应用', 5), /^5 /);
+  assert.match(i18n.t('{0} 个应用', 5).replace(/\u200F/g, ''), /^5 /);
+  // 从右到左：插入的数字 / 英文值两侧加 RLM，避免相邻的值被并成一段左到右的文字
+  assert.equal(i18n.t('{0} 个应用', 5), '\u200F5\u200F تطبيق');
   // 词典里没有的条目回落原文，不会抛错
   assert.equal(i18n.t('这条不存在的文字'), '这条不存在的文字');
   i18n.setLanguage('zh-CN');

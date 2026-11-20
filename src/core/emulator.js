@@ -881,8 +881,10 @@ class EmulatorEngine {
         ok: false,
         needsReset: true,
         fsGB: this.dataInfo().fsGB,
-        error: __('安卓正在用快速启动的差量盘，就地扩容改不到它（目标 {0} GB）。', wantGB)
-          + __('需要「重置安卓数据」后按新容量重建 /data —— 已装应用和存档会被清空，请先确认。'),
+        error: __.cat(
+          __('安卓正在用快速启动的差量盘，就地扩容改不到它（目标 {0} GB）。', wantGB),
+          __('需要「重置安卓数据」后按新容量重建 /data —— 已装应用和存档会被清空，请先确认。'),
+        ),
       };
     }
     const r = this.ensureDataPartition(dir, dataMB);
@@ -896,8 +898,10 @@ class EmulatorEngine {
         ok: false,
         ...r,
         fsGB: Number((fsAfter / 1073741824).toFixed(1)),
-        error: __('镜像已扩到 {0} GB，但文件系统只到 {1} GB（resize2fs 没成功）。', wantGB, (fsAfter / 1073741824).toFixed(1))
-          + __('可以再点一次「立即扩容」，或清理磁盘后重试。'),
+        error: __.cat(
+          __('镜像已扩到 {0} GB，但文件系统只到 {1} GB（resize2fs 没成功）。', wantGB, (fsAfter / 1073741824).toFixed(1)),
+          __('可以再点一次「立即扩容」，或清理磁盘后重试。'),
+        ),
       };
     }
     return r;
@@ -1245,16 +1249,20 @@ class EmulatorEngine {
     const diskMB = doctor.freeDiskMB(loc.root);
     const needMB = 2500;
     if (avdFreeMB && avdFreeMB < needMB) {
-      const msg = __('磁盘空间不足：安卓数据目录（{0}）所在磁盘只剩 {1} GB，', avdHome, (avdFreeMB / 1024).toFixed(1))
-        + __('运行时至少要 {0} GB 可用。请在「设置 → 系统集成 → 安卓数据目录」', (needMB / 1024).toFixed(1))
-        + __('把它改到空间充足的盘（例如 D:），或先清理磁盘。你的应用与存档不会被自动删除。');
+      const msg = __.cat(
+        __('磁盘空间不足：安卓数据目录（{0}）所在磁盘只剩 {1} GB，', avdHome, (avdFreeMB / 1024).toFixed(1)),
+        __('运行时至少要 {0} GB 可用。请在「设置 → 系统集成 → 安卓数据目录」', (needMB / 1024).toFixed(1)),
+        __('把它改到空间充足的盘（例如 D:），或先清理磁盘。你的应用与存档不会被自动删除。'),
+      );
       this.log(msg);
       onLog(msg);
       return { ok: false, error: msg, needsSpace: true, attempts: [] };
     }
     if (diskMB && diskMB < 300) {
-      const msg = __('运行时目录（{0}）所在磁盘只剩 {1} GB，', loc.root, (diskMB / 1024).toFixed(1))
-        + __('连日志和临时文件都写不下。请清理磁盘，或把「运行时数据目录」也换到别的盘。');
+      const msg = __.cat(
+        __('运行时目录（{0}）所在磁盘只剩 {1} GB，', loc.root, (diskMB / 1024).toFixed(1)),
+        __('连日志和临时文件都写不下。请清理磁盘，或把「运行时数据目录」也换到别的盘。'),
+      );
       this.log(msg);
       onLog(msg);
       return { ok: false, error: msg, needsSpace: true, attempts: [] };
@@ -1483,9 +1491,11 @@ class EmulatorEngine {
           network = await this.checkNetwork('', { waitMs: 12000, interval: 3000 });
         } catch (_) { /* 体检失败不算启动失败 */ }
         if (network && !network.ok) {
-          onLog(__('⚠ 安卓虚拟机暂时没连上网（Wi-Fi 未关联或没拿到地址）。')
-            + __('需要联网的应用打开后可能一直黑屏：稍后重开应用即可；')
-            + __('若持续无网，可在「设置 → 修复网络」重连（不会删除已装应用）。'));
+          onLog(__.cat(
+            __('⚠ 安卓虚拟机暂时没连上网（Wi-Fi 未关联或没拿到地址）。'),
+            __('需要联网的应用打开后可能一直黑屏：稍后重开应用即可；'),
+            __('若持续无网，可在「设置 → 修复网络」重连（不会删除已装应用）。'),
+          ));
         }
         return {
           ok: true, serial: this.serial, port, accel: accelInfo, logFile,
@@ -1518,9 +1528,11 @@ class EmulatorEngine {
       },
     });
     const err = new Error(
-      __('运行时多次尝试仍未能启动（{0}）。\n{1}\n\n', d.title, d.hint)
-      + __('已尝试：{0}\n', this.attempts.map((a) => `${a.plan} → ${a.diagnosis}`).join(__('；')))
-      + __('诊断报告：{0}', report.file),
+      __.cat(
+        __('运行时多次尝试仍未能启动（{0}）。\n{1}\n\n', d.title, d.hint),
+        __('已尝试：{0}\n', this.attempts.map((a) => `${a.plan} → ${a.diagnosis}`).join(__('；'))),
+        __('诊断报告：{0}', report.file),
+      ),
     );
     err.diagnosis = d;
     err.report = report.file;

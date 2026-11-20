@@ -166,6 +166,14 @@ for (const file of walk(SRC)) {
         unwrapped.push(`${rel}:${s.line}  ${JSON.stringify(s.value).slice(0, 90)}`);
       }
     }
+  } else if (file.endsWith('.json') && /[\\/]drivers[\\/]/.test(file)) {
+    // 内置示例驱动：名称和说明会显示在「驱动 · 兼容补丁」列表里（由网页自动翻译）
+    try {
+      const j = JSON.parse(fs.readFileSync(file, 'utf8'));
+      for (const k of [j.name, j.description]) {
+        if (k && CJK.test(k) && !used.has(k)) used.set(k, rel);
+      }
+    } catch (_) { /* 坏 JSON 交给驱动测试去报 */ }
   } else if (file.endsWith('.html')) {
     for (const k of scanHtml(fs.readFileSync(file, 'utf8'))) {
       if (!used.has(k)) used.set(k, rel);

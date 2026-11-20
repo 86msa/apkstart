@@ -341,9 +341,11 @@ class Provisioner {
     const free = doctor.freeDiskMB(dir);
     if (free && free < need + buf) {
       throw new Error(
-        __('目标磁盘空间不足：该组件约需 {0} MB，但「{1}」所在盘仅剩 {2} MB。\n', need + buf, dir, free)
-        + __('建议：把「运行时数据目录」改到空间更大的盘（设置 → 系统集成 → 运行时数据目录 → 浏览），')
-        + __('或先清理磁盘 / 卸载不用的应用后再试。'),
+        __.cat(
+          __('目标磁盘空间不足：该组件约需 {0} MB，但「{1}」所在盘仅剩 {2} MB。\n', need + buf, dir, free),
+          __('建议：把「运行时数据目录」改到空间更大的盘（设置 → 系统集成 → 运行时数据目录 → 浏览），'),
+          __('或先清理磁盘 / 卸载不用的应用后再试。'),
+        ),
       );
     }
     return free;
@@ -1145,8 +1147,10 @@ class Provisioner {
       minChunk: 4 * 1024 * 1024,
       onProgress: (pr) => onProgress({
         stage: 'download',
-        message: __('下载运行时引擎 {0}MB / {1}MB', (pr.got / 1048576).toFixed(0), (pr.total / 1048576).toFixed(0))
-          + (pr.speed ? __('（{0} MB/s）', (pr.speed / 1048576).toFixed(1)) : ''),
+        message: __.cat(
+          __('下载运行时引擎 {0}MB / {1}MB', (pr.got / 1048576).toFixed(0), (pr.total / 1048576).toFixed(0)),
+          (pr.speed ? __('（{0} MB/s）', (pr.speed / 1048576).toFixed(1)) : ''),
+        ),
         percent: Math.round(pr.percent * 0.85),
         canResume: true,
       }),
@@ -1262,8 +1266,10 @@ class Provisioner {
       minChunk: 4 * 1024 * 1024,
       onProgress: (pr) => onProgress({
         stage: 'download',
-        message: __('下载兼容镜像 {0}MB / {1}MB', (pr.got / 1048576).toFixed(0), (pr.total / 1048576).toFixed(0))
-          + (pr.speed ? __('（{0} MB/s）', (pr.speed / 1048576).toFixed(1)) : ''),
+        message: __.cat(
+          __('下载兼容镜像 {0}MB / {1}MB', (pr.got / 1048576).toFixed(0), (pr.total / 1048576).toFixed(0)),
+          (pr.speed ? __('（{0} MB/s）', (pr.speed / 1048576).toFixed(1)) : ''),
+        ),
         percent: Math.round(pr.percent * 0.8),
         canResume: true,
       }),
@@ -1350,8 +1356,10 @@ class Provisioner {
       resume: true,
       onProgress: (pr) => onProgress({
         stage: 'download',
-        message: __('下载 QEMU… {0}MB / {1}MB', (pr.got / 1048576).toFixed(0), (pr.total / 1048576).toFixed(0))
-          + (pr.speed ? __('（{0} KB/s）', (pr.speed / 1024).toFixed(0)) : ''),
+        message: __.cat(
+          __('下载 QEMU… {0}MB / {1}MB', (pr.got / 1048576).toFixed(0), (pr.total / 1048576).toFixed(0)),
+          (pr.speed ? __('（{0} KB/s）', (pr.speed / 1024).toFixed(0)) : ''),
+        ),
         percent: pr.percent,
         canResume: true,
       }),
@@ -1394,8 +1402,10 @@ class Provisioner {
       connections: 8,
       onProgress: (pr) => onProgress({
         stage: 'download',
-        message: __('下载系统镜像… {0}MB / {1}MB', (pr.got / 1048576).toFixed(0), (pr.total / 1048576).toFixed(0))
-          + (pr.speed ? __('（{0} KB/s）', (pr.speed / 1024).toFixed(0)) : ''),
+        message: __.cat(
+          __('下载系统镜像… {0}MB / {1}MB', (pr.got / 1048576).toFixed(0), (pr.total / 1048576).toFixed(0)),
+          (pr.speed ? __('（{0} KB/s）', (pr.speed / 1024).toFixed(0)) : ''),
+        ),
         percent: pr.percent,
         canResume: true,
       }),

@@ -70,9 +70,22 @@
     return lang;
   }
 
+  /**
+   * 从右到左的语言里，插进句子的值（数字、英文、路径）前后加 RLM（U+200F，不可见）。
+   * 否则相邻的两个值会被双向算法并成一段从左到右的文字：
+   *   「ذاكرة 3.0GB · 2 نواة」会显示成「ذاكرة 2 · 3.0GB نواة」。
+   * 只给含拉丁字母 / 数字的值加；中文界面完全不受影响。
+   */
+  const RLM = '\u200F';
+  function bidiArg(v) {
+    const s = String(v);
+    if (info(lang).dir !== 'rtl' || !/[A-Za-z0-9]/.test(s)) return s;
+    return RLM + s + RLM;
+  }
+
   function format(s, args) {
     if (!args.length) return s;
-    return s.replace(/\{(\d+)\}/g, (m, i) => (Number(i) < args.length ? String(args[Number(i)]) : m));
+    return s.replace(/\{(\d+)\}/g, (m, i) => (Number(i) < args.length ? bidiArg(args[Number(i)]) : m));
   }
 
   /** 翻译。key 是中文原文（模板里的 ${x} 换成 {0}、{1}…） */
@@ -81,6 +94,23 @@
     const v = dict ? dict[k] : undefined;
     return format(typeof v === 'string' && v ? v : k, args);
   }
+
+  /**
+   * 拼接几段界面文字。中文句子之间不需要空格，原样相连（行为与改造前完全一致）；
+   * 阿拉伯语等以空格分词的语言，在两段之间补一个空格——除非前一段已以空白结尾，
+   * 或后一段以空白 / 标点开头。代码里 `__('甲。') + __('乙')` 统一写成 `__.cat(__('甲。'), __('乙'))`。
+   */
+  function cat(...parts) {
+    const strs = parts.filter((p) => p !== undefined && p !== null && p !== '').map(String);
+    if (lang === SOURCE) return strs.join('');
+    let out = '';
+    for (const p of strs) {
+      if (out && !/\s$/.test(out) && !/^[\s.,،؛:;!?؟)\]»】）。，、]/.test(p)) out += ' ';
+      out += p;
+    }
+    return out;
+  }
+  t.cat = cat;
 
   /** 网页里的文本节点带缩进换行，查词典前统一压成单个空格 */
   function normText(s) { return String(s).replace(/\s+/g, ' ').trim(); }
@@ -100,9 +130,14 @@
     const key = normText(raw);
     const v = dict[key];
     if (typeof v !== 'string' || !v) return;
-    // 保留原文前后的空白，避免和相邻内联元素粘在一起
-    const lead = /^\s/.test(raw) ? ' ' : '';
-    const tail = /\s$/.test(raw) ? ' ' : '';
+    // 保留原文前后的空白，避免和相邻内联元素粘在一起。
+    // 中文原文与 <b>/<code>/<kbd> 之间本来就不留空格；阿拉伯语按词分隔，
+    // 紧挨着内联元素的一侧要补一个空格（标点开头 / 结尾的不补）。
+    const spaced = lang !== SOURCE;
+    const prevEl = node.previousSibling && node.previousSibling.nodeType === 1;
+    const nextEl = node.nextSibling && node.nextSibling.nodeType === 1;
+    const lead = /^\s/.test(raw) || (spaced && prevEl && !/^[\s.,،؛:;!?؟)»]/.test(v)) ? ' ' : '';
+    const tail = /\s$/.test(raw) || (spaced && nextEl && !/[\s(«]$/.test(v)) ? ' ' : '';
     node.nodeValue = lead + v + tail;
   }
 

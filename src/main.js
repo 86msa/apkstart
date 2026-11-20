@@ -856,9 +856,11 @@ async function enableWhpxFeatures() {
 }
 
 /** 商店版专用的手动引导文案：MSIX 包固定 mediumIL，提权通常拿不到 */
-const MSIX_ACCEL_HINT = __('商店版无法自行提权。请手动开启一次：')
-  + __('按 Win+R → 输入 optionalfeatures → 勾选「Windows 虚拟机监控程序平台」')
-  + __('（HypervisorPlatform，WHPX 真正需要的那个），确定后重启电脑。');
+const MSIX_ACCEL_HINT = __.cat(
+  __('商店版无法自行提权。请手动开启一次：'),
+  __('按 Win+R → 输入 optionalfeatures → 勾选「Windows 虚拟机监控程序平台」'),
+  __('（HypervisorPlatform，WHPX 真正需要的那个），确定后重启电脑。'),
+);
 
 // ---------------- 主窗口 ----------------
 
@@ -1517,8 +1519,10 @@ async function launchOne(pkg) {
         if (!a || a.ok) return;
         accelWarned = true;
         notify(__('正在以软件模拟运行（很慢）'), store.STORE_BUILD
-          ? __('开启「Windows 虚拟机监控程序平台」后重启一次，速度可提升 5~10 倍。')
-            + __('设置 → 环境自检 → 修复 会直接打开该窗口。')
+          ? __.cat(
+            __('开启「Windows 虚拟机监控程序平台」后重启一次，速度可提升 5~10 倍。'),
+            __('设置 → 环境自检 → 修复 会直接打开该窗口。'),
+          )
           : __('设置 → 环境自检 → 修复 可一键开启（需管理员授权），之后重启一次。'));
       }).catch(() => {});
     }
@@ -2090,8 +2094,10 @@ function registerIpc() {
           // 这一条是实测 dll 文件不存在才报，可信。但要说清：0xC0000135 不等于
           // 一定是缺 VC++——商店版从 WindowsApps 起子进程也会报同码。装完若仍
           // 起不来，按内置手册 6.8 继续定位，别反复重装运行库。
-          hint: __('实测系统缺少微软 VC++ 2015-2022（x64），安卓运行时依赖它。')
-            + __('可一键安装；若装完仍报 0xC0000135，见内置手册 6.8——商店版还可能是子进程 DLL 路径问题。'), fix: 'vcRedist',
+          hint: __.cat(
+            __('实测系统缺少微软 VC++ 2015-2022（x64），安卓运行时依赖它。'),
+            __('可一键安装；若装完仍报 0xC0000135，见内置手册 6.8——商店版还可能是子进程 DLL 路径问题。'),
+          ), fix: 'vcRedist',
         });
       }
       accel = await runtime.provisioner.emulatorAccel().catch(() => ({ ok: false }));
@@ -2107,18 +2113,22 @@ function registerIpc() {
             code: 'accel',
             severity: 'error',
             title: __('需要开启「Windows 虚拟机监控程序平台」'),
-            hint: __('没有它只能跑纯软件模拟，开机会慢到几分钟。')
-              + MSIX_ACCEL_HINT
-              + __('（商店版无法代你提权，需要你手动操作一次，之后重启。）'),
+            hint: __.cat(
+              __('没有它只能跑纯软件模拟，开机会慢到几分钟。'),
+              MSIX_ACCEL_HINT,
+              __('（商店版无法代你提权，需要你手动操作一次，之后重启。）'),
+            ),
             fix: 'virtualization',
           }
           : {
             code: 'accel',
             severity: 'warn',
             title: __('未启用硬件加速'),
-            hint: `${accel.note || __('将回退软件模拟（能跑但很慢）。')}`
-              + __('点右侧「修复」会自动开启（需要管理员授权，可能要重启一次）；')
-              + __('失败时会自动改装 AEHD 驱动。'),
+            hint: __.cat(
+              `${accel.note || __('将回退软件模拟（能跑但很慢）。')}`,
+              __('点右侧「修复」会自动开启（需要管理员授权，可能要重启一次）；'),
+              __('失败时会自动改装 AEHD 驱动。'),
+            ),
             fix: 'virtualization',
           });
       }
@@ -2342,10 +2352,12 @@ function registerIpc() {
       cancelId: 0,
       title: __('确认清理运行时缓存'),
       message: __('将释放约 {0} MB', (preview.candidates.reduce((n, c) => n + c.size, 0) / 1048576).toFixed(0)),
-      detail: (opts.includeSnapshots
+      detail: __.cat(
+        (opts.includeSnapshots
         ? __('会先停止运行时，再删除旧镜像、当前 AVD 的快速启动快照、锁文件和非活动 AVD 的缓存。已安装的应用本身保留（只清快照），')
-        : __('只删除旧镜像、旧快照、锁文件和非活动 AVD 的缓存，已安装的应用会保留。'))
-        + __('此操作不可撤销，建议先导出诊断报告。'),
+        : __('只删除旧镜像、旧快照、锁文件和非活动 AVD 的缓存，已安装的应用会保留。')),
+        __('此操作不可撤销，建议先导出诊断报告。'),
+      ),
     });
     if (response !== 1) return { ...preview, cancelled: true };
     return runtime.cleanup({ apply: true, aggressive: !!opts.aggressive, includeSnapshots: !!opts.includeSnapshots });

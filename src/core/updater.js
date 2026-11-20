@@ -355,8 +355,10 @@ class Updater {
             this.onProgress({
               stage: 'download',
               percent: Math.max(1, Math.min(99, pct)),
-              message: __('下载中 {0} MB{1}', (got / 1048576).toFixed(1), total ? ` / ${(total / 1048576).toFixed(1)} MB` : '')
-                + __('（第 {0}/{1} 片）{2}', part.index, asset.parts.length, sp),
+              message: __.cat(
+                __('下载中 {0} MB{1}', (got / 1048576).toFixed(1), total ? ` / ${(total / 1048576).toFixed(1)} MB` : ''),
+                __('（第 {0}/{1} 片）{2}', part.index, asset.parts.length, sp),
+              ),
               speed: pr.speed,
             });
           },

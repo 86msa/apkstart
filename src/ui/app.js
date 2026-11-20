@@ -525,8 +525,10 @@ function friendlyInstallErrorText(msg) {
   }
   if (/INSTALL_FAILED_VERSION_DOWNGRADE/i.test(s)) return __('{0}\n已装版本更高，先在右键菜单里卸载再装。', s);
   if (/ERR_FS_FILE_TOO_LARGE|greater than possible Buffer|Cannot allocate|ENOMEM|out of memory/i.test(s)) {
-    return __('{0}\n这个安装包过大或内存不足，解析被系统拒绝了。请确认磁盘与内存充足后重试；', s)
-      + __('仍失败请把安装包路径换成纯英文短路径（如 D:\\a.apk）。');
+    return __.cat(
+      __('{0}\n这个安装包过大或内存不足，解析被系统拒绝了。请确认磁盘与内存充足后重试；', s),
+      __('仍失败请把安装包路径换成纯英文短路径（如 D:\\a.apk）。'),
+    );
   }
   return s;
 }
@@ -784,8 +786,10 @@ async function refreshAndroid() {
     el.textContent = r && r.error ? __('运行时未就绪（{0}）', String(r.error).slice(0, 36)) : __('运行时未启动');
     return;
   }
-  el.textContent = `Android ${r.sdk || '?'} · ${r.wifi ? __('Wi-Fi 已开') : __('Wi-Fi 已关')}` +
-    __('{0} · 音量 {1}%', r.airplane ? __(' · 飞行模式') : '', r.volume);
+  el.textContent = __.cat(
+    `Android ${r.sdk || '?'} · ${r.wifi ? __('Wi-Fi 已开') : __('Wi-Fi 已关')}`,
+    __('{0} · 音量 {1}%', r.airplane ? __(' · 飞行模式') : '', r.volume),
+  );
   $('setAndroidWifi').checked = !!r.wifi;
   $('setAndroidAirplane').checked = !!r.airplane;
   $('setAndroidAnim').checked = !r.animationsOff;
@@ -856,10 +860,12 @@ async function refreshResources() {
   const host = r.host || {};
   const lim = r.limits || {};
   const free = Number(r.freeMB) || Number((r.current && r.current.freeMB) || 0);
-  bNote.textContent = __('本机 {0} 内存 / {1} 核；', gb(host.totalMB), host.cores)
-    + __('内存最多可分 {0}，核心最多 {1} 个（各留 1/4 内存与 1 核给 Windows）。', gb(lim.maxMB), Math.max(1, (host.cores || 1) - 1))
-    + __('数据分区上限 {0} GB{1}。', lim.maxGB || 0, free ? __('（所在磁盘剩余 {0} GB）', (free / 1024).toFixed(1)) : '')
-    + (r.verdict && r.verdict.note ? ` ${r.verdict.note}` : '');
+  bNote.textContent = __.cat(
+    __('本机 {0} 内存 / {1} 核；', gb(host.totalMB), host.cores),
+    __('内存最多可分 {0}，核心最多 {1} 个（各留 1/4 内存与 1 核给 Windows）。', gb(lim.maxMB), Math.max(1, (host.cores || 1) - 1)),
+    __('数据分区上限 {0} GB{1}。', lim.maxGB || 0, free ? __('（所在磁盘剩余 {0} GB）', (free / 1024).toFixed(1)) : ''),
+    (r.verdict && r.verdict.note ? ` ${r.verdict.note}` : ''),
+  );
 }
 
 /** 本机体检：渲染报告（每条带等级点和可执行动作） */
@@ -934,9 +940,11 @@ function renderPreflight(res) {
   }
   const rec = report.recommended || {};
   if (sum) {
-    sum.textContent = __('{0}。推荐配置：{1} GB 内存 / ', report.summary, Math.round((rec.memoryMB || 0) / 1024))
-      + __('{0} 核 / {1} · 渲染 {2}', rec.cores || 2, rec.renderSize || 'auto', rec.gpuMode || 'auto')
-      + (edition === 'store' ? __('（商店版：系统功能只能在「Windows 功能」里手动开）') : '');
+    sum.textContent = __.cat(
+      __('{0}。推荐配置：{1} GB 内存 / ', report.summary, Math.round((rec.memoryMB || 0) / 1024)),
+      __('{0} 核 / {1} · 渲染 {2}', rec.cores || 2, rec.renderSize || 'auto', rec.gpuMode || 'auto'),
+      (edition === 'store' ? __('（商店版：系统功能只能在「Windows 功能」里手动开）') : ''),
+    );
   }
   if (applyBtn) applyBtn.hidden = false;
 }
@@ -972,9 +980,11 @@ function renderDrivers(r) {
   const onCount = drivers.filter((d) => d.enabled && d.matched).length;
   if (sum) {
     const accel = host.accel === 'none' ? __('无硬件加速') : (host.accel || __('未知'));
-    sum.textContent = __('本机：{0}/{1} · {2} 显卡 · {3}', host.platform || '', host.arch || '', host.gpuVendor || __('未知'), accel)
-      + __(' · emulator {0}；驱动 {1} 个，本机已生效 {2} 个。', host.emulatorVersion || __('未知'), drivers.length, onCount)
-      + (errors.length ? __(' {0} 个文件加载失败（见下）。', errors.length) : '');
+    sum.textContent = __.cat(
+      __('本机：{0}/{1} · {2} 显卡 · {3}', host.platform || '', host.arch || '', host.gpuVendor || __('未知'), accel),
+      __(' · emulator {0}；驱动 {1} 个，本机已生效 {2} 个。', host.emulatorVersion || __('未知'), drivers.length, onCount),
+      (errors.length ? __(' {0} 个文件加载失败（见下）。', errors.length) : ''),
+    );
   }
   list.textContent = '';
   for (const d of drivers) {
@@ -1137,8 +1147,10 @@ async function refreshDataInfo() {
   const pending = Number(info.pendingGB) > 0
     ? __(' 目标 {0} GB 还没生效：安卓正在用快速启动差量盘，需要「重置安卓数据」后按新容量重建（会清空已装应用）。', info.configuredGB)
     : '';
-  el.textContent = __('当前数据分区：{0}{1} · 所在磁盘剩余 {2}。{3}', img, auto ? __('（自动）') : '', free, pending)
-    + __('游戏提示「存储空间不足」就把这里调大后点「立即扩容」；能就地扩容时不丢已装应用。');
+  el.textContent = __.cat(
+    __('当前数据分区：{0}{1} · 所在磁盘剩余 {2}。{3}', img, auto ? __('（自动）') : '', free, pending),
+    __('游戏提示「存储空间不足」就把这里调大后点「立即扩容」；能就地扩容时不丢已装应用。'),
+  );
 }
 
 /* ---------------- 设置页：分类导航 + 搜索 ---------------- */
@@ -1635,8 +1647,10 @@ function bindSettings() {
       toast({
         type: 'ok',
         title: __('已按这台机器配置好'),
-        body: __('内存 {0} GB / {1} 核 / {2}', Math.round((r.recommended.memoryMB || 0) / 1024), r.recommended.cores, r.recommended.renderSize)
-          + (r.driverFile ? __('；已生成驱动，下次开机会自动套用') : ''),
+        body: __.cat(
+          __('内存 {0} GB / {1} 核 / {2}', Math.round((r.recommended.memoryMB || 0) / 1024), r.recommended.cores, r.recommended.renderSize),
+          (r.driverFile ? __('；已生成驱动，下次开机会自动套用') : ''),
+        ),
       });
       if (r.driverError) toast({ type: 'warn', title: __('驱动没写成功'), body: r.driverError });
       fillSettings(r.settings);
@@ -1933,15 +1947,6 @@ function bindSettings() {
       type: 'ok',
     });
   });
-  $('btnRebuildShortcuts').addEventListener('click', async () => {
-    const r = await api.rebuildShortcuts();
-    toast({
-      title: r && r.fixed && r.fixed.length ? __('已补齐快捷方式') : __('快捷方式都还在'),
-      body: r && r.fixed && r.fixed.length ? r.fixed.join(__('、')) : __('桌面与开始菜单入口正常'),
-      type: 'ok',
-    });
-  });
-
   $('btnDiagnostics').addEventListener('click', async () => {
     try {
       const r = await api.doctorReport();
@@ -1986,10 +1991,12 @@ function bindSettings() {
         type: 'warning',
         title: __('重置安卓数据？'),
         message: __('这会把安卓系统还原成「刚装好系统」的干净状态：'),
-        detail: __('• 删除全部已安装的第三方 app（含红果、游戏等）及其数据、登录态\n')
-          + __('• 删除当前 AVD 的快速启动快照\n')
-          + __('• 系统镜像本身不受影响，重新打开应用会再次冷启动建数据\n\n')
-          + __('此操作不可撤销。是否继续？'),
+        detail: __.cat(
+          __('• 删除全部已安装的第三方 app（含红果、游戏等）及其数据、登录态\n'),
+          __('• 删除当前 AVD 的快速启动快照\n'),
+          __('• 系统镜像本身不受影响，重新打开应用会再次冷启动建数据\n\n'),
+          __('此操作不可撤销。是否继续？'),
+        ),
         buttons: [__('取消'), __('继续')],
         defaultId: 0,
         cancelId: 0,
@@ -2035,11 +2042,13 @@ function bindSettings() {
         type: 'warning',
         title: __('修复虚拟机网络？'),
         message: __('应用里需要联网的页面一直黑屏/转圈，通常是安卓虚拟机没有网络。'),
-        detail: __('修复会按「代价从小到大」依次尝试：\n\n')
-          + __('1. 冷启动虚拟机（不加载快照）后等待联网 —— 不影响任何数据\n')
-          + __('2. 仍不行才重置安卓数据 —— 应用清单保留、点开会自动重装，\n')
-          + __('   但应用内的登录态、追剧记录等会丢失\n\n')
-          + __('只影响当前 AVD，系统镜像和本机 APK 缓存都不动。整个过程约 1–5 分钟。是否继续？'),
+        detail: __.cat(
+          __('修复会按「代价从小到大」依次尝试：\n\n'),
+          __('1. 冷启动虚拟机（不加载快照）后等待联网 —— 不影响任何数据\n'),
+          __('2. 仍不行才重置安卓数据 —— 应用清单保留、点开会自动重装，\n'),
+          __('   但应用内的登录态、追剧记录等会丢失\n\n'),
+          __('只影响当前 AVD，系统镜像和本机 APK 缓存都不动。整个过程约 1–5 分钟。是否继续？'),
+        ),
         buttons: [__('取消'), __('开始修复')],
         defaultId: 0,
         cancelId: 0,
@@ -2088,8 +2097,10 @@ function bindSettings() {
         type: 'warning',
         title: __('清理旧版本残留？'),
         message: __('找到 {0} 项残留，约 {1} MB：', items.length, mb),
-        detail: __('{0}\n\n只删除「旧版本程序目录 / 已失效的卸载项 / 更新临时文件」，', lines.join('\n'))
-          + __('当前正在运行的版本和你的应用数据都不会动。'),
+        detail: __.cat(
+          __('{0}\n\n只删除「旧版本程序目录 / 已失效的卸载项 / 更新临时文件」，', lines.join('\n')),
+          __('当前正在运行的版本和你的应用数据都不会动。'),
+        ),
         buttons: [__('取消'), __('开始清理')],
         defaultId: 1,
         cancelId: 0,
@@ -2117,20 +2128,25 @@ function bindSettings() {
 
   $('btnOpenShared').addEventListener('click', () => api.openSharedDir());
 
-  // 重建快捷方式：桌面图标被误删 / 被安全软件拦掉时的兜底入口
-  $('btnRebuildShortcuts').addEventListener('click', async () => {
-    const btn = $('btnRebuildShortcuts');
-    btn.disabled = true;
-    try {
-      const r = await api.rebuildShortcuts().catch(() => ({ ok: false }));
-      const fixed = (r && r.fixed) || [];
-      toast(fixed.length
-        ? { title: __('快捷方式已重建'), body: fixed.join(__('、')), type: 'ok' }
-        : { title: __('快捷方式都在'), body: __('没有需要重建的入口'), type: 'info' });
-    } finally {
-      btn.disabled = false;
-    }
-  });
+  // 重建快捷方式：桌面图标被误删 / 被安全软件拦掉时的兜底入口。
+  // 「常用与安装」和「集成与文件」各有一个按钮（以前两个按钮共用同一个 id：
+  // 第二个按钮点了没反应，第一个按钮却被绑了两遍、一次点击重建两次弹两条提示）。
+  for (const id of ['btnRebuildShortcuts', 'btnRebuildShortcuts2']) {
+    const btn = $(id);
+    if (!btn) continue;
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try {
+        const r = await api.rebuildShortcuts().catch(() => ({ ok: false }));
+        const fixed = (r && r.fixed) || [];
+        toast(fixed.length
+          ? { title: __('快捷方式已重建'), body: fixed.join(__('、')), type: 'ok' }
+          : { title: __('快捷方式都在'), body: __('没有需要重建的入口'), type: 'info' });
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  }
 
   // 共享目录：先浏览选目录，再「保存并迁移」把旧文件一次性搬到新目录
   $('btnBrowseShared').addEventListener('click', async () => {

@@ -195,8 +195,10 @@ function diskVerdict(freeMB, requiredMB) {
     ok: false,
     freeMB: free,
     requiredMB: need,
-    message: __('磁盘空间不足：还要约 {0} GB，但 ApkStart 运行时所在磁盘只剩 {1} GB。', Math.ceil(need / 1024), (free / 1024).toFixed(1))
-      + __('请在设置里把运行时目录挪到空间更大的分区，或清理后重试。'),
+    message: __.cat(
+      __('磁盘空间不足：还要约 {0} GB，但 ApkStart 运行时所在磁盘只剩 {1} GB。', Math.ceil(need / 1024), (free / 1024).toFixed(1)),
+      __('请在设置里把运行时目录挪到空间更大的分区，或清理后重试。'),
+    ),
   };
 }
 

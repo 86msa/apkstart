@@ -25,8 +25,10 @@ class BuiltinBackend extends Backend {
   static get label() { return __('自带运行时（Android Emulator + QEMU）'); }
 
   static get summary() {
-    return __('零第三方依赖：apkstart 自己下载并管理 Android 14 镜像，ARM 应用走镜像自带的翻译层。')
-      + __('首次启动约 25 秒，之后靠 quickboot 快照秒进。');
+    return __.cat(
+      __('零第三方依赖：apkstart 自己下载并管理 Android 14 镜像，ARM 应用走镜像自带的翻译层。'),
+      __('首次启动约 25 秒，之后靠 quickboot 快照秒进。'),
+    );
   }
 
   static get embedCapable() { return true; }
@@ -150,8 +152,10 @@ class BuiltinBackend extends Backend {
       freeMB,
       pending: false,
       verdict: memVerdict(memMB, host.totalMB),
-      note: __('自带运行时的内存/CPU 下次启动安卓生效；数据分区改大后点「立即扩容」——')
-        + __('能就地扩就保留已装应用，安卓正在用快速启动差量盘时会提示你重置后按新容量重建。'),
+      note: __.cat(
+        __('自带运行时的内存/CPU 下次启动安卓生效；数据分区改大后点「立即扩容」——'),
+        __('能就地扩就保留已装应用，安卓正在用快速启动差量盘时会提示你重置后按新容量重建。'),
+      ),
     };
   }
 
@@ -169,8 +173,10 @@ class BuiltinBackend extends Backend {
     if (capGB && capGB * 1024 < need) {
       return {
         ok: false,
-        message: __('安卓数据分区不足：当前 {0} GB，这个游戏建议至少 {1} GB。', capGB, Math.ceil(need / 1024))
-          + __('请在设置 → 引擎里把「数据分区容量」调大后重启安卓（会就地扩容，不丢已装应用）。'),
+        message: __.cat(
+          __('安卓数据分区不足：当前 {0} GB，这个游戏建议至少 {1} GB。', capGB, Math.ceil(need / 1024)),
+          __('请在设置 → 引擎里把「数据分区容量」调大后重启安卓（会就地扩容，不丢已装应用）。'),
+        ),
       };
     }
     return { ok: true, requiredMB: need };

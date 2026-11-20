@@ -258,8 +258,10 @@ function evaluate({ hw = {}, settings = {}, edition = 'installer' } = {}) {
       key: 'vt-bios-off',
       level: 'bad',
       title: __('CPU 虚拟化在 BIOS 里没开'),
-      detail: __('重启进 BIOS/UEFI，把 Intel VT-x（Intel）或 SVM Mode（AMD）设为 Enabled，保存后回来重新体检。')
-        + __('联想/戴尔/华硕一般在 Advanced → CPU Configuration 里；品牌机可能叫 Virtualization Technology。'),
+      detail: __.cat(
+        __('重启进 BIOS/UEFI，把 Intel VT-x（Intel）或 SVM Mode（AMD）设为 Enabled，保存后回来重新体检。'),
+        __('联想/戴尔/华硕一般在 Advanced → CPU Configuration 里；品牌机可能叫 Virtualization Technology。'),
+      ),
       action: { kind: 'manual', id: 'bios', label: __('需要重启进 BIOS，无法自动完成') },
     });
   } else if (cpu.vtFirmware === true) {
@@ -298,8 +300,10 @@ function evaluate({ hw = {}, settings = {}, edition = 'installer' } = {}) {
       key: 'whpx-off',
       level: 'bad',
       title: __('「虚拟机监控程序平台」没有启用'),
-      detail: __('商店版不能自行改系统功能。按 Win+R → 输入 optionalfeatures → 勾选「Windows 虚拟机监控程序平台」')
-        + __('（HypervisorPlatform）与「虚拟机平台」→ 确定 → 重启。'),
+      detail: __.cat(
+        __('商店版不能自行改系统功能。按 Win+R → 输入 optionalfeatures → 勾选「Windows 虚拟机监控程序平台」'),
+        __('（HypervisorPlatform）与「虚拟机平台」→ 确定 → 重启。'),
+      ),
       action: { kind: 'elevate', id: 'virtualization', label: __('打开「Windows 功能」窗口') },
     });
   } else {

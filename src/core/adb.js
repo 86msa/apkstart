@@ -57,8 +57,10 @@ function friendlyInstallError(raw) {
   const tag = code ? code[0] : '';
   const table = {
     INSTALL_FAILED_NO_MATCHING_ABIS:
-      __('安装失败：这个应用只提供 ARM 原生库（多数国产应用如此），')
-      + __('当前系统镜像没有 ARM 转译层。ApkStart 会自动切换到内置新版翻译层的兼容镜像并重试。'),
+      __.cat(
+        __('安装失败：这个应用只提供 ARM 原生库（多数国产应用如此），'),
+        __('当前系统镜像没有 ARM 转译层。ApkStart 会自动切换到内置新版翻译层的兼容镜像并重试。'),
+      ),
     INSTALL_FAILED_OLDER_SDK:
       __('安装失败：应用要求的 Android 版本高于当前运行时（需更高系统镜像）。'),
     INSTALL_PARSE_FAILED_NO_CERTIFICATES:
@@ -75,8 +77,10 @@ function friendlyInstallError(raw) {
     INSTALL_FAILED_ALREADY_EXISTS: __('安装失败：已存在同名应用且签名不同，请先卸载。'),
     INSTALL_FAILED_UPDATE_INCOMPATIBLE: __('安装失败：与已安装版本签名不一致，请先卸载旧版。'),
     INSTALL_FAILED_DEPRECATED_SDK_VERSION:
-      __('安装失败：这是面向很老 Android 版本的应用（targetSdk 过低），Android 14 默认禁止安装。')
-      + __('ApkStart 会自动用官方绕过参数重试。'),
+      __.cat(
+        __('安装失败：这是面向很老 Android 版本的应用（targetSdk 过低），Android 14 默认禁止安装。'),
+        __('ApkStart 会自动用官方绕过参数重试。'),
+      ),
     INSTALL_FAILED_TEST_ONLY: __('安装失败：这是仅供测试的应用包，已自动加上测试包参数重试。'),
     INSTALL_FAILED_MISSING_SHARED_LIBRARY: __('安装失败：应用依赖的设备特性（如特定厂商库）在当前运行时不存在。'),
     INSTALL_FAILED_USER_RESTRICTION: __('安装失败：系统限制了安装，请重启运行时后重试。'),
@@ -91,12 +95,16 @@ function friendlyInstallError(raw) {
 function friendlyLaunchError(raw, pkg) {
   const t = String(raw || '');
   if (/DoBadTrampoline|libndk_translation|houdini|SIGABRT.*arm/i.test(t)) {
-    return __('{0} 启动后崩溃：ARM 翻译层与该应用的信号处理不兼容。', pkg || __('应用'))
-      + __('ApkStart 会自动切换到 Android 14 兼容镜像后重试。');
+    return __.cat(
+      __('{0} 启动后崩溃：ARM 翻译层与该应用的信号处理不兼容。', pkg || __('应用')),
+      __('ApkStart 会自动切换到 Android 14 兼容镜像后重试。'),
+    );
   }
   if (/UnsatisfiedLinkError|dlopen failed|couldn't find "lib|\.so.*not found/i.test(t)) {
-    return __('{0} 启动后崩溃：缺少设备原生库（应用可能只提供 ARM 版本）。', pkg || __('应用'))
-      + __('会自动切换到带 ARM 翻译层的兼容镜像后重试。');
+    return __.cat(
+      __('{0} 启动后崩溃：缺少设备原生库（应用可能只提供 ARM 版本）。', pkg || __('应用')),
+      __('会自动切换到带 ARM 翻译层的兼容镜像后重试。'),
+    );
   }
   if (/ClassNotFoundException|NoClassDefFoundError|AndroidRuntime/i.test(t)) {
     return __('{0} 启动即崩溃（应用内部异常，可能与模拟器环境或缺少 Google 服务有关）。', pkg || __('应用'));

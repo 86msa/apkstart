@@ -265,8 +265,10 @@ class Installer {
           // 已经切到兼容镜像仍失败：这次必须说实话，别再说「正在重试」。
           const raw2 = (e2 && e2.message) || String(e2 || '');
           const err = new Error(
-            __('已切换到 Android 14 兼容镜像并重启运行时，但 {0} 仍然安装失败（{1}）。', meta.label, raw2)
-            + __('请检查磁盘空间与网络后重试；若一直失败，到「设置 → 诊断与修复」导出诊断报告反馈。'),
+            __.cat(
+              __('已切换到 Android 14 兼容镜像并重启运行时，但 {0} 仍然安装失败（{1}）。', meta.label, raw2),
+              __('请检查磁盘空间与网络后重试；若一直失败，到「设置 → 诊断与修复」导出诊断报告反馈。'),
+            ),
           );
           err.code = e2 && e2.code ? e2.code : 'NO_MATCHING_ABIS';
           err.abiRetried = true;

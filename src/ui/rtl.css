@@ -71,3 +71,32 @@
 
 /* 应用壳窗口标题栏 */
 [dir="rtl"] .bar { padding-left: 0; padding-right: 10px; }
+
+/* ---- 第二轮界面审查（阿拉伯语文字普遍比中文长）---- */
+
+/* 字距会把阿拉伯字母之间的连写拆开，从右到左界面一律不加字距；
+   分组标题也不再强制大写（只会把 Android / LANGUAGE 这类英文词变大写） */
+[dir="rtl"] body,
+[dir="rtl"] body * { letter-spacing: normal !important; }
+[dir="rtl"] .group-title,
+[dir="rtl"] .dbg-group-title { text-transform: none; }
+
+/* 设置左侧导航：阿拉伯语分类名更长（「التحديث وحول البرنامج」会被截断） */
+[dir="rtl"] .set-nav { width: 204px; }
+
+/* 按钮文字不折行；放不下时整排按钮换行，而不是把每个按钮挤成两行 */
+[dir="rtl"] .btn { white-space: nowrap; }
+[dir="rtl"] .field .row,
+[dir="rtl"] .runtime-actions { flex-wrap: wrap; row-gap: 6px; }
+/* 「磁盘总占用」的统计文字单独占一行，不再被按钮挤成一列竖排 */
+[dir="rtl"] #usageText { flex: 1 1 100%; }
+[dir="rtl"] .runtime-actions .inline-note { flex: 1 1 220px; }
+
+/* break-all 是给中文长串（路径 / 包名）准备的，会把阿拉伯语单词从中间截断
+   （「لفتح ا / لتطبيق」）。从右到左界面改为按词换行，只有超长的英文串才允许断开。 */
+[dir="rtl"] .toast .t-body,
+[dir="rtl"] .step .d,
+[dir="rtl"] .dbg-detail,
+[dir="rtl"] .about-desc { word-break: normal; overflow-wrap: anywhere; }
+/* 提示条正文里用 \n 分行（英文原始报错一行、阿拉伯语说明一行），每行按自己的内容决定方向 */
+[dir="rtl"] .toast .t-body { white-space: pre-line; unicode-bidi: plaintext; text-align: start; }
