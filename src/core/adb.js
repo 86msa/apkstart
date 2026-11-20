@@ -911,9 +911,8 @@ class AdbClient {
       // 部分应用据此自我判定离线、拒绝加载内容。换成国内返回 204 的端点。
       // 每次启动都写一次（幂等、单条 shell 里，几乎零成本），这样即使从旧快照
       // 恢复、或用户手动改过系统设置，也能自动纠正回来。
-      'settings put global captive_portal_http_url http://connect.rom.miui.com/generate_204',
-      'settings put global captive_portal_https_url https://connect.rom.miui.com/generate_204',
-      'settings put global captive_portal_mode 0',
+      // 海外用户（阿拉伯语界面）不写国内地址，恢复安卓默认，见 core/region.js
+      ...require('./region').captivePortalCommands(),
       // 注意：这里不要再写 wm user-rotation / accelerometer_rotation。
       // 方向由 setOrientation / resetDisplayOverrides 按当前横竖屏状态统一定，
       // 在这里写死 lock 0 会把横屏方向覆盖回竖屏（画面躺倒）。

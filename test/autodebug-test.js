@@ -98,6 +98,13 @@ test('offline 与 no-device 区分开，且严重度不同', () => {
   assert(codes(stuck).includes('device.missing'), '开机超过 3 分钟仍看不到设备要报');
 });
 
+test('开机过程中短暂 offline 不算问题', () => {
+  const booting = ad.evaluate({ runtime: { running: true, ready: false, bootMs: 30000 }, device: { checked: true, state: 'offline' } });
+  assert(!codes(booting).includes('device.offline'), '开机中不该报 offline');
+  const stuck = ad.evaluate({ runtime: { running: true, ready: true }, device: { checked: true, state: 'offline' } });
+  assert(codes(stuck).includes('device.offline'), '就绪后仍 offline 要报');
+});
+
 test('开机过程中 adb 暂时看不到设备不算问题', () => {
   const booting = ad.evaluate({ runtime: { running: true, ready: false, bootMs: 20000 }, device: { checked: true, state: 'no-device' } });
   assert(!codes(booting).includes('device.missing'), '开机中不该报设备缺失');

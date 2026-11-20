@@ -1011,8 +1011,11 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(/chineseIme/.test(engJs), '要允许用户关掉');
 
     // 联网验证端点：不能让 gstatic 把网络标成「!」
-    assert(/captive_portal_http_url/.test(adbJs), '要设置国内联网验证端点');
-    assert(/connect\.rom\.miui\.com/.test(adbJs), '端点要国内可达');
+    // 端点按地区选（core/region.js）：中文界面用国内端点，阿拉伯语界面恢复安卓默认
+    const regionJs = fs.readFileSync(path.join(__dirname, '..', 'src', 'core', 'region.js'), 'utf8');
+    assert(/captivePortalCommands\(\)/.test(adbJs), '要设置联网验证端点');
+    assert(/captive_portal_http_url/.test(regionJs), '要设置国内联网验证端点');
+    assert(/connect\.rom\.miui\.com/.test(regionJs), '端点要国内可达');
 
     // 设置页要有开关
     assert(/setLocale/.test(html) && /setChineseIme/.test(html), '设置页要暴露语言/输入法开关');
@@ -1282,7 +1285,7 @@ const { AdbClient, friendlyInstallError, friendlyLaunchError } = require('../src
     assert(/uiautomator dump/.test(emuJs), '重连要靠 uiautomator 找到热点再点');
     // 连上之后还要把「联网验证」探针换成国内可达的端点，否则系统一直给网络打「!」，
     // 部分应用据此判定离线、拒绝加载内容。
-    assert(/captive_portal_http_url/.test(emuJs), '需要把联网验证探针改成国内可达端点');
+    assert(/captivePortalCommands\(/.test(emuJs), '需要把联网验证探针改成国内可达端点');
     // 明令禁止用 connect-network 当主方案（权限不够，必然失败）。
     // 只看真正的代码行——注释里提到它是在解释为什么不用。
     const emuCode = emuJs.split('\n')

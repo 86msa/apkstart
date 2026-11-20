@@ -116,5 +116,18 @@ test('安卓系统语言：阿拉伯语界面下默认英文（避免阿拉伯-�
   assert.equal(resolveGuestLocale({ locale: 'zh-CN' }), 'zh-CN', '中文界面行为不变');
 });
 
+test('网络地区：中文界面用国内 DNS / 端点，阿拉伯语界面用安卓默认，手动选择优先', () => {
+  const region = require('../src/core/region');
+  i18n.setLanguage('zh-CN');
+  assert.equal(region.useChinaNetwork({ fastDns: true }), true);
+  assert.equal(region.connectivityHost({ fastDns: true }), 'connect.rom.miui.com');
+  i18n.setLanguage('ar');
+  assert.equal(region.useChinaNetwork({ fastDns: true }), false, '海外默认不用国内 DNS');
+  assert.equal(region.connectivityHost({ fastDns: true }), 'connectivitycheck.gstatic.com');
+  assert.ok(region.captivePortalCommands({ fastDns: true }).every((c) => /settings delete/.test(c)), '海外恢复安卓默认验证地址');
+  assert.equal(region.useChinaNetwork({ fastDns: true, fastDnsChosen: true }), true, '手动打开就听用户的');
+  i18n.setLanguage('zh-CN');
+});
+
 console.log(`\n结果：${passed} 通过，${failed} 失败`);
 process.exit(failed ? 1 : 0);

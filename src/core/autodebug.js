@@ -146,7 +146,9 @@ function evaluate(obs) {
       hint: __('安卓侧弹过「允许 USB 调试吗」但没被确认，adb 一直连不上。重启运行时（走一次冷启动）会重新弹出确认框，确认后即恢复。'),
       fix: 'restartRuntime',
     });
-  } else if (device.state === 'offline') {
+  } else if (device.state === 'offline'
+    // 开机过程中 adb 先看到 offline 再变 device 是正常的，只在就绪后或开机超过 3 分钟才报
+    && (!runtime.running || runtime.ready || (Number(runtime.bootMs) || 0) > 180000)) {
     push({
       code: 'device.offline',
       category: 'device',

@@ -705,7 +705,8 @@ class EmulatorEngine {
     // DNS：安卓默认用 10.0.2.3（转发到主机 DNS）。主机走 VPN / 公司网 / 某些运营商
     // 时，一次解析能拖到几百毫秒，表现为「页面转圈半天才开始加载」。给一份国内公共
     // DNS 作为首选，失败时系统仍会回退。用户可在设置里关掉（内网域名场景）。
-    if (this.settings?.engine?.fastDns !== false) {
+    // 海外用户（阿拉伯语界面、没手动打开过）不强制国内 DNS，见 core/region.js
+    if (require('./region').useChinaNetwork(this.settings?.engine)) {
       args.push('-dns-server', '223.5.5.5,119.29.29.29');
     }
     if (lcd) args.push('-skin', `${lcd.w}x${lcd.h}`);
@@ -1104,9 +1105,10 @@ class EmulatorEngine {
     // 让应用起来，一次 DNS 抖动不该卡住整个启动。
     let reachable = null;
     if (waitMs > 0) {
+      const probeHost = require('./region').connectivityHost(this.settings?.engine);
       const probe = await sh(
-        "echo -e 'GET /generate_204 HTTP/1.0\\r\\nHost: connect.rom.miui.com\\r\\n\\r\\n' "
-        + "| nc -w 4 connect.rom.miui.com 80 2>/dev/null | head -1",
+        `echo -e 'GET /generate_204 HTTP/1.0\\r\\nHost: ${probeHost}\\r\\n\\r\\n' `
+        + `| nc -w 4 ${probeHost} 80 2>/dev/null | head -1`,
         7000,
       );
       reachable = /HTTP\/1\.[01]\s+204/.test(probe);
@@ -1151,9 +1153,10 @@ class EmulatorEngine {
     // 系统就一直给网络打「!」标记（已连接但无法访问互联网）。部分应用会因此
     // 自我判定为离线、拒绝加载内容。换成一个返回 204 的国内端点即可。
     const tune = async () => {
-      await sh('settings put global captive_portal_http_url http://connect.rom.miui.com/generate_204');
-      await sh('settings put global captive_portal_https_url https://connect.rom.miui.com/generate_204');
-      await sh('settings put global captive_portal_mode 0');
+      for (const c of require('./region').captivePortalCommands(this.settings?.engine)) {
+        // eslint-disable-next-line no-await-in-loop
+        await sh(c);
+      }
     };
     // 已经连上就别折腾了
     if (/Wifi is connected/i.test(await sh('cmd wifi status'))) {
