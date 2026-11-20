@@ -1,4 +1,4 @@
-# Microsoft Store 提交材料（ApkStart 0.6.1）
+# Microsoft Store 提交材料（ApkStart 0.6.3）
 
 > 这份文件是给 Partner Center 表单直接复制用的。包体、图标、清单由脚本产出，
 > 只有「注册账号 → 预留名称 → 上传 → 送审」必须在网页上人工完成。
@@ -12,7 +12,7 @@
 | Product name | `ApkStart` |
 | Category | Developer tools → Utilities & tools（备选：Productivity） |
 | Price | Free |
-| Package | `dist/store/ApkStart_0.6.1.0_x64.msix`（x64，约 1.5 GB） |
+| Package | `dist/store/ApkStart_0.6.3.0_x64.msix`（x64，约 1.5 GB） |
 | 支持语言 | 简体中文 / English (United States) |
 | 官网 | https://github.com/RoutineMiku/apkstart |
 | 支持邮箱 | <!-- 填你的邮箱 --> |
@@ -22,10 +22,24 @@
 
 **中文**
 ```
-0.6.1：
-· 修复「启动后看到的还是 ApkStart 的美化等待窗口」：现在一点开应用就让模拟器原生窗口接管画面，你能立刻看到安卓自己的开机画面，而不是我们的转圈页。
-· 原生窗口接管失败会自动重试 4 次（冷启动、换横竖屏之后 Qt 窗口会晚一点才出现），四次都不成功才临时退回内置窗口，不会再留下一屏黑或一张永远转圈的等待页。
-· 默认窗口设置加固：只要没在设置里主动切换过窗口承载方式，一律按模拟器原生窗口启动；老配置里残留的嵌入开关也会被自动纠正。
+0.6.3：
+· 启动动画焕新：极简苹果风——柔和光晕、图标缓慢呼吸、细腻淡入淡出；图标改用完整源不再缺角，且至少完整播放约 2 秒，不再一闪而过。打开应用时动画保持到画出第一屏才淡出，不提前露白底。
+· 打开应用更快：合并窗口接管时的重复等待、加快进程存活探测，点开到出画面更利落。
+· 设置新增「实验室」分组，含「Windows 原生多窗口多开（实验性）」开关：开启后多个应用可驻留后台、随时切回并保留登录态（默认关闭）。受限于单一模拟器窗口，同一时刻仍只显示一个应用画面。
+· 启动失败诊断更准确：0xC0000135 不再一律说「重装 VC++/杀毒删文件」，而是区分真缺运行库、商店版只读目录限制或杀软隔离，并带你到内置手册 6.8 节。
+· 便携版新增增量更新：从 GitHub / Gitee 升级只下几 MB 代码，不重下系统镜像、运行时、已装应用和快照；有哈希校验、失败回退完整包。商店版仍经 Microsoft Store 差分更新。
+· 保留 0.6.2 的内置手册、故障自动教程、声音检测与 ARM 安装修复。
+
+0.6.2（已包含）：
+· 内置使用手册：标题栏「?」、设置 → 关于、托盘菜单都能直接打开；可筛选目录、打印或存成 PDF。
+· 修复失败自动给教程：硬件加速、安装失败、ARM 转译层、adb 未授权、没有声音等自动修复失败时，直接打开对应章节；每条检测结果旁也有「教程」按钮。
+· 自动检测新增声音检查：能发现「安卓应用声音」被关掉和 Windows Audio 服务停止，前者可一键重新打开并重启运行时。
+· ARM 应用安装更稳：报错本身即触发切换兼容镜像，切换前作废旧快照，二次仍失败如实告知。
+
+0.6.1（已包含）：
+· 修复启动后仍是 ApkStart 等待窗口：原生窗口尽早接管画面；接管失败自动重试四次。
+· 修复换向约 40 秒白屏与偶发打不开；首帧判定改为守到应用真正画出第一屏。
+· 修复连点两次图标导致旧实例关掉新实例模拟器的问题；全屏按屏幕比例居中。
 
 0.6.0（已包含）：
 · 修复底部「按键错位」：安卓 13 的平板任务栏（屏幕底部那条半透明栏）在平板排版下会盖住应用、把返回/主页/最近键挤到左下角，现在默认关闭。
@@ -95,10 +109,24 @@
 
 **English**
 ```
-0.6.1:
-· Fixed "launching an app still shows ApkStart's own styled waiting window": the emulator's native window now takes over the moment you open an app, so you see Android's own boot screen instead of our spinner page.
-· Native window hand-over now retries four times (Qt's window can appear a little late on cold starts and after an orientation change); only if all four fail does it temporarily fall back to the built-in window — no more black screen and no endless spinner.
-· Hardened the default window setting: unless you explicitly switched the window host in Settings, ApkStart always launches with the emulator's native window, and a leftover "embedded" flag from older configs is corrected automatically.
+0.6.3:
+· Refreshed launch animation in a minimal Apple-inspired style: soft glow, a gently breathing icon and smooth fades. The icon uses the full-resolution source (no clipped corners) and plays for at least ~2s instead of flashing by. When opening an app it stays until the first frame is drawn instead of showing the white splash early.
+· Faster app launches: merged duplicate waits during window hand-over and sped up process-alive detection.
+· New "Labs" settings section with an experimental "Windows native multi-window" switch: when on, multiple apps stay resident and can be switched back to instantly with login state kept (off by default). One emulator window still shows one app at a time.
+· More accurate startup-failure diagnosis: 0xC0000135 no longer always means "reinstall VC++ / antivirus deleted a file"; it distinguishes a missing runtime, Store read-only path limits and antivirus quarantine, and links to manual section 6.8.
+· Incremental updates for the portable build: upgrading from GitHub / Gitee downloads only a few MB of code, not the system image, runtime, installed apps or snapshots. Hash-verified with automatic fallback. Store builds keep updating via Microsoft Store.
+· Keeps 0.6.2 features: built-in manual, automatic help, sound diagnostics and ARM install fixes.
+
+0.6.2 (included):
+· Built-in user manual, open from the "?" button, Settings → About or the tray menu; searchable, printable and saveable as PDF.
+· Automatic help: when repair fails for hardware acceleration, installation, ARM translation, adb authorization or audio, ApkStart opens the matching section; every diagnostic item has a "Guide" button.
+· Auto diagnostics for sound: detects Android audio being turned off and the Windows Audio service being stopped; the first is fixable with one click and a runtime restart.
+· More reliable ARM installs: an ABI error alone triggers a switch to the compatible image, with the old snapshot invalidated first; a second failure is reported honestly.
+
+0.6.1 (included):
+· Fixed launches that still showed ApkStart's own waiting screen; the emulator's native window takes over early and retries four times.
+· Fixed the ~40 second blank screen during orientation switches, and the first-frame detection that left a white screen with only the app icon.
+· Fixed a quitting instance shutting down the emulator a newer instance was using; fullscreen now keeps the panel aspect ratio and centres the window.
 
 0.6.0 (included):
 · Fixed the "misaligned buttons" at the bottom: on tablet layout Android 13's large-screen taskbar sits over the app and squeezes back/home/recents into the bottom-left corner — it is now off by default.
@@ -371,7 +399,7 @@ Notes:
    ```powershell
    node build/msix.js --identity "<Identity/Name>" --publisher "<Identity/Publisher>"
    ```
-4. **Packages** → 上传 `dist/store/ApkStart_0.6.1.0_x64.msix`，等待校验通过。
+4. **Packages** → 上传 `dist/store/ApkStart_0.6.3.0_x64.msix`，等待校验通过。
 5. **Store listing** → 填第 2–5 节的内容、上传截图、选分类。
 6. **Pricing and availability** → Free，市场选中国 + 全球。
 7. **Submission options** → 粘贴第 6 节的 certification notes。

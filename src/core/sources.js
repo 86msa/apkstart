@@ -24,20 +24,33 @@ const OWNER_GH = 'RoutineMiku';
 const OWNER_GITEE = 'daily-miku';
 const REPO = 'apkstart';
 
-const SOURCES = {
-  github: {
-    id: 'github',
-    name: 'GitHub',
-    api: `https://api.github.com/repos/${OWNER_GH}/${REPO}`,
-    web: `https://github.com/${OWNER_GH}/${REPO}`,
-  },
-  gitee: {
-    id: 'gitee',
-    name: 'Gitee',
-    api: `https://gitee.com/api/v5/repos/${OWNER_GITEE}/${REPO}`,
-    web: `https://gitee.com/${OWNER_GITEE}/${REPO}`,
-  },
-};
+/**
+ * 由「owner/repo」生成源定义；gitee 传空（null / ''）表示不用 Gitee。
+ * 默认是原作者的仓库（运行时整包等公共资源从这里下）；
+ * 程序自身的更新可以指向别的仓库（例如阿拉伯语版本所在的 fork），见 package.json 的 apkstart.updateRepos。
+ */
+function makeSources({ github = `${OWNER_GH}/${REPO}`, gitee = `${OWNER_GITEE}/${REPO}` } = {}) {
+  const out = {};
+  if (github) {
+    out.github = {
+      id: 'github',
+      name: 'GitHub',
+      api: `https://api.github.com/repos/${github}`,
+      web: `https://github.com/${github}`,
+    };
+  }
+  if (gitee) {
+    out.gitee = {
+      id: 'gitee',
+      name: 'Gitee',
+      api: `https://gitee.com/api/v5/repos/${gitee}`,
+      web: `https://gitee.com/${gitee}`,
+    };
+  }
+  return out;
+}
+
+const SOURCES = makeSources();
 
 /** 已知可用的 GitHub 加速前缀。只在用户开启 autoMirror 且未自定义时参与测速。 */
 const KNOWN_MIRRORS = [
@@ -214,8 +227,10 @@ function mirrorList(settings) {
 }
 
 class Sources {
-  constructor(settingsFn) {
+  constructor(settingsFn, repos) {
     this.settings = typeof settingsFn === 'function' ? settingsFn : () => ({});
+    // 这一组 Sources 实例问哪些仓库（默认原作者仓库 + Gitee 镜像）
+    this.defs = repos ? makeSources(repos) : SOURCES;
     this._rankCache = new Map();   // url -> {at, speed, ok}
     this._rankTtl = 30 * 60 * 1000;
     // 版本检查结果缓存：Gitee 的匿名调用限流很紧（连续几次就 403），
@@ -247,7 +262,7 @@ class Sources {
    *   ApkStart-<tag>-win64-portable.zip / ApkStart-<version>-Setup.exe / ApkStart-runtime-<tag>.zip
    */
   async _releaseTagViaRedirect(id) {
-    const s = SOURCES[id];
+    const s = this.defs[id];
     const page = `${s.web}/releases/latest`;
     const res = await openUrl(page, { timeout: 9000, followRedirect: false });
     const loc = String(res.headers.location || '');
@@ -258,7 +273,7 @@ class Sources {
 
   /** 用 tag 拼一份「最小可用」的 release（没有 API 时用） */
   _syntheticRelease(id, tag) {
-    const s = SOURCES[id];
+    const s = this.defs[id];
     const ver = String(tag).replace(/^v/i, '');
     const names = [
       `ApkStart-${tag}-win64-portable.zip`,
@@ -287,7 +302,10 @@ class Sources {
 
   async fetchReleases() {
     const prefs = String((this.settings().runtime || {}).sourcePreference || 'auto');
-    const ids = prefs === 'github' || prefs === 'gitee' ? [prefs] : ['github', 'gitee'];
+    let ids = (prefs === 'github' || prefs === 'gitee' ? [prefs] : ['github', 'gitee'])
+      .filter((id) => this.defs[id]);
+    // 选了一个本实例没有配置的源（例如更新仓库没有 Gitee 镜像）：退回已配置的源
+    if (!ids.length) ids = Object.keys(this.defs);
     // 公开仓库的 releases 接口匿名就能读；仓库若是私有的，Gitee 会回 404
     // "Not Found Project"（而不是 401），那种情况才需要在这里填一个只读 token。
     // 另外匿名调用有频率限制，感兴趣的用户可以填 token 提高额度。
@@ -297,7 +315,7 @@ class Sources {
       : url);
 
     const jobs = ids.map(async (id) => {
-      const s = SOURCES[id];
+      const s = this.defs[id];
       const skip = this.blockedReason(id);
       if (skip) return { source: id, name: s.name, web: s.web, error: skip };
       try {
@@ -347,6 +365,16 @@ class Sources {
       }
     }
     const ok = all.filter((x) => x && x.rel);
+    // 仓库存在但还没发布过任何版本（API 回 404、列表为空、也没有 latest 跳转）：
+    // 这不是「连不上」，而是「没有更新」，如实告诉上层，界面显示「已是最新版本」。
+    if (!ok.length && all.length && all.every((x) => x && /\b404\b|Not Found/i.test(String(x.error || '')))) {
+      const none = {
+        version: '', tag: '', name: '', notes: '', htmlUrl: '', publishedAt: '',
+        assets: [], sources: [], unreachable: [], noRelease: true,
+      };
+      this._relCache = { at: Date.now(), key: pref, value: none };
+      return none;
+    }
     if (!ok.length) {
       const why = all.map((x) => `${x.name || x.source}: ${x.error || __('无数据')}`).join(__('；'));
       // 全挂了但手里有上一次的结果：宁可给一份「可能是旧的」版本信息，
@@ -504,4 +532,4 @@ class Sources {
   }
 }
 
-module.exports = { Sources, SOURCES, measure, KNOWN_MIRRORS, withMirror, mirrorList };
+module.exports = { Sources, SOURCES, makeSources, measure, KNOWN_MIRRORS, withMirror, mirrorList };

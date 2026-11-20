@@ -443,7 +443,7 @@ const RULES = [
   },
   {
     code: 'MEMORY',
-    re: /Cannot allocate memory|not enough memory|commit charge|Failed to allocate|out of memory|内存不足/i,
+    re: /Cannot allocate memory|not enough memory|commit charge|Failed to allocate|out of memory|内存不足|الذاكرة غير كافية/i,
     title: __('内存分配失败'),
     hint: __('已自动下调分配给 Android 的内存与核心数。请关闭占内存的程序后重试。'),
   },
@@ -467,20 +467,26 @@ const RULES = [
   },
   {
     code: 'DLL',
-    re: /0xc0000135|STATUS_DLL_NOT_FOUND|missing DLL|Qt6.*not found|MSVCP140|VCRUNTIME|无法启动此程序|The code execution cannot proceed/i,
-    title: __('运行时组件被杀毒软件删除或缺少 VC++ 运行库'),
-    hint: __('请把 ApkStart 目录加入杀毒软件白名单后重新解压安装包，并安装微软 VC++ 2015-2022 运行库。'),
+    re: /0xc0000135|STATUS_DLL_NOT_FOUND|missing DLL|Qt6.*not found|MSVCP140|VCRUNTIME|无法启动此程序|The code execution cannot proceed|لا يمكن متابعة تنفيذ التعليمات البرمجية/i,
+    // 0xC0000135 只代表「某个 DLL 没加载成功」，常见原因不止一个：
+    // 商店（MSIX）版从 WindowsApps 只读目录拉起子进程时DLL 搜索会被容器改写、
+    // VC++ 运行库确实缺失、杀毒隔离了运行时文件，三种都可能。原来一律断言
+    // 「杀毒删了 / 缺 VC++」是照退出码静态猜的，会误导用户重装无用。
+    // 真实缺哪个 DLL 要看 WER 的 FaultingModuleName；这里如实列为「待定位」。
+    title: __('运行时依赖 DLL 加载失败（具体原因待定位）'),
+    hint: __('常见原因：商店版从只读目录启动子进程的路径限制、VC++ 运行库缺失、杀毒隔离了运行时文件。')
+      + __('请打开内置手册 6.8 按步骤定位；不要只凭这一条就重装运行库。'),
   },
   {
     code: 'DISK_FULL',
-    re: /No space left|disk full|not enough space|磁盘空间不足/i,
+    re: /No space left|disk full|not enough space|磁盘空间不足|مساحة كافية على القرص/i,
     title: __('磁盘空间不足，无法启动安卓'),
     hint: __('请把运行时目录（设置 → 系统集成 → 运行时数据目录）改到空间充足的盘，')
       + __('或在设置里关掉「保留快速启动快照」/ 调小数据分区。安卓数据不会被自动清除。'),
   },
   {
     code: 'NON_ASCII',
-    re: /Unicode|non-ASCII|路径.*(无效|找不到)|cannot find the path/i,
+    re: /Unicode|non-ASCII|路径.*(无效|找不到)|cannot find the path|تعذر العثور على المسار/i,
     title: __('安装路径含中文或特殊字符'),
     hint: __('已自动改用 Windows 短路径。若仍失败，请把 ApkStart 移到纯英文目录（如 C:\\ApkStart）。'),
   },

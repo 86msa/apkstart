@@ -512,6 +512,12 @@ body {
   border: 1px solid var(--brand); color: var(--brand); background: var(--brand-soft);
 }
 .dbg-item .dbg-fix:hover { background: var(--brand); color: #fff; }
+.dbg-item .dbg-help {
+  flex: 0 0 auto; align-self: center;
+  height: 28px; padding: 0 9px; font-size: 12px; border-radius: 8px;
+  border: 1px solid var(--line); color: var(--muted); background: transparent;
+}
+.dbg-item .dbg-help:hover { border-color: var(--brand); color: var(--brand); }
 .dbg-ok {
   display: flex; align-items: center; gap: 8px;
   padding: 10px 12px; border-radius: 10px;
@@ -544,6 +550,17 @@ body {
   font-size: 11.5px; font-weight: 650; letter-spacing: .4px;
   color: var(--faint); text-transform: uppercase;
   margin-bottom: 10px;
+}
+
+/* 实验室分组的实验性提示 */
+.lab-notice {
+  font-size: 11.5px; line-height: 1.6; color: var(--faint);
+  background: rgba(255, 255, 255, .03);
+  border: 1px solid var(--line);
+  border-left: 2px solid #c9a227;
+  border-radius: 6px;
+  padding: 9px 12px;
+  margin-bottom: 14px;
 }
 
 .field { margin-bottom: 12px; }
@@ -687,6 +704,12 @@ body {
   border: 1px solid var(--brand); color: var(--brand); background: var(--brand-soft);
 }
 .env-check-item .ec-fix:hover { background: var(--brand); color: #fff; }
+.env-check-item .ec-help {
+  flex: 0 0 auto; align-self: center;
+  height: 28px; padding: 0 9px; font-size: 12px; border-radius: 8px;
+  border: 1px solid var(--line); color: var(--muted); background: transparent;
+}
+.env-check-item .ec-help:hover { border-color: var(--brand); color: var(--brand); }
 .env-check-ok {
   display: flex; align-items: center; gap: 8px;
   padding: 12px 14px; color: var(--brand-dark); font-size: 12.5px;

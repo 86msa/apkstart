@@ -21,7 +21,8 @@ const lang = process.argv.slice(2).find((a) => !a.startsWith('--')) || 'ar';
 const strict = process.argv.includes('--strict');
 const CJK = /[　-〿一-鿿＀-￯]/;
 /** 这些文件只写日志或是 PowerShell，不参与界面翻译 */
-const SKIP = new Set(['preload.js', 'splash-preload.js']);
+// manual.html 是整份中文手册，阿拉伯语版本是单独的整页翻译（manual.ar.html），不走词典
+const SKIP = new Set(['preload.js', 'splash-preload.js', 'manual.html', 'manual.ar.html']);
 
 function walk(dir, out = []) {
   for (const f of fs.readdirSync(dir)) {
@@ -95,7 +96,8 @@ function scanJs(src, from = 0, exprMode = false, out = []) {
       const lineEnd = src.indexOf('\n', start);
       const lineText = src.slice(lineStart, lineEnd < 0 ? n : lineEnd);
       out.push({
-        log: /\bappLog\(/.test(lineText),
+        // appLog 文件日志与手册锚点（anchor: 必须与 manual.html 的 id 一致）不翻译
+        log: /\bappLog\(|\banchor:/.test(lineText),
         value: unescapeJs(body),
         wrapped: /__\(\s*$/.test(before),
         hasExpr,
