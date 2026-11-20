@@ -66,6 +66,8 @@ contextBridge.exposeInMainWorld('apkstart', {
 
   resetAndResize: (gb) => invoke('runtime:resetAndResize', gb),
   confirm: (opts) => invoke('app:confirm', opts || {}),
+  // 多选一的系统对话框（Electron 不支持 window.prompt，按键映射预设靠它来选）
+  choose: (opts) => invoke('app:choose', opts || {}),
   displayState: () => invoke('display:state'),
   displaySet: (patch) => invoke('display:set', patch || {}),
   displayToggle: () => invoke('display:toggle'),

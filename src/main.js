@@ -2268,6 +2268,28 @@ function registerIpc() {
   });
 
   /**
+   * 多选一：渲染层给出按钮文字，返回点了第几个（cancelId 表示取消）。
+   * Electron 的渲染进程不支持 window.prompt（直接返回 null），需要「从几项里挑一个」时走这里。
+   * Windows 上 noLink:false 会把非通用按钮显示成大号命令链接，按钮文字里 \n 之后是说明小字。
+   */
+  ipcMain.handle('app:choose', async (_e, opts = {}) => {
+    const buttons = (Array.isArray(opts.buttons) ? opts.buttons : []).map((b) => String(b)).slice(0, 12);
+    if (!buttons.length) return { response: -1 };
+    const cancelId = Number.isInteger(opts.cancelId) ? opts.cancelId : buttons.length - 1;
+    const { response } = await dialog.showMessageBox(mainWindow || undefined, {
+      type: 'question',
+      title: opts.title || __('确认'),
+      message: opts.message || '',
+      detail: opts.detail || '',
+      buttons,
+      cancelId,
+      defaultId: Number.isInteger(opts.defaultId) ? opts.defaultId : 0,
+      noLink: false,
+    });
+    return { response: response === cancelId ? -1 : response };
+  });
+
+  /**
    * 资源分配总览：宿主上限、当前分配、数据盘余量。
    * 由运行时自己的 resources() 回答，界面只认这个结构。
    */

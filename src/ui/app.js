@@ -739,31 +739,36 @@ async function handleMenu(act) {
 }
 
 /**
- * 按键映射预设选择器。用 confirm + prompt 做最简交互（不引入新 UI 组件）。
- * 后续可以做成更精致的弹窗编辑器。
+ * 按键映射预设选择器。
+ *
+ * 以前用 window.prompt 让用户输入编号——但 Electron 的渲染进程根本不支持 prompt
+ * （直接返回 null），于是右键菜单里的「按键映射…」点了什么都不会发生。
+ * 现在用系统的多选一对话框：每个预设一个按钮（标题 + 说明），另有「清除」与「取消」。
  */
 async function showKeymapPicker(pkg, label) {
   try {
     const presets = await api.keymap.getPresets();
     const current = await api.keymap.getMap(pkg);
     const hasCurrent = current && current.length > 0;
-    const lines = presets.map((p, i) => `${i + 1}. ${p.label} — ${p.desc}`);
-    if (hasCurrent) lines.unshift(__('0. 清除当前映射'));
-    const msg = __('为「{0}」选择按键映射预设：\n\n{1}\n\n输入编号：', label, lines.join('\n'));
-    const input = window.prompt(msg, hasCurrent ? '0' : '1');
-    if (input === null) return; // 取消
-    const idx = parseInt(input, 10);
-    if (hasCurrent && idx === 0) {
+    const buttons = presets.map((p) => `${p.label}\n${p.desc}`);
+    if (hasCurrent) buttons.push(__('清除当前映射'));
+    buttons.push(__('取消'));
+    const r = await api.choose({
+      title: __('按键映射'),
+      message: __('为「{0}」选择按键映射预设', label),
+      buttons,
+      cancelId: buttons.length - 1,
+      defaultId: 0,
+    });
+    const idx = r ? r.response : -1;
+    if (idx < 0) return; // 取消
+    if (hasCurrent && idx === presets.length) {
       await api.keymap.setMap(pkg, []);
       toast({ title: __('已清除按键映射'), body: label, type: 'ok' });
       return;
     }
-    const presetIdx = hasCurrent ? idx - 1 : idx;
-    if (presetIdx < 1 || presetIdx > presets.length) {
-      toast({ title: __('无效编号'), type: 'error' });
-      return;
-    }
-    const chosen = presets[presetIdx - 1];
+    if (idx >= presets.length) return;
+    const chosen = presets[idx];
     await api.keymap.applyPreset(pkg, chosen.id);
     toast({ title: __('已套用「{0}」', chosen.label), body: __('{0} · 打开应用后键盘即可操控', label), type: 'ok' });
   } catch (e) {
