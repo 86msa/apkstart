@@ -841,10 +841,20 @@ class Provisioner {
    * 第二个调用方直接等第一次的结果即可。
    */
   materializeImages(onLog = () => {}) {
-    if (this._materializing) return this._materializing;
-    this._materializing = this._materializeImagesOnce(onLog)
-      .finally(() => { this._materializing = null; });
-    return this._materializing;
+    // 串行而不是「复用进行中的那次」：一键部署刚解完整包就调用这里，
+    // 若复用的是解包之前就开始扫描的那一轮，会拿到「没找到 .xz」或读到半截文件。
+    // 排队再跑一轮代价很小 —— 已展开的镜像会被直接跳过。
+    // 进度消息广播给所有正在等待的调用方，排在后面的界面也能看到展开进度。
+    if (!this._matListeners) this._matListeners = new Set();
+    this._matListeners.add(onLog);
+    const emit = (m) => {
+      for (const l of this._matListeners) { try { l(m); } catch (_) { /* ignore */ } }
+    };
+    const run = (this._matQueue || Promise.resolve())
+      .catch(() => {})
+      .then(() => this._materializeImagesOnce(emit));
+    this._matQueue = run;
+    return run.finally(() => { this._matListeners.delete(onLog); });
   }
 
   async _materializeImagesOnce(onLog = () => {}) {

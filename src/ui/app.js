@@ -71,6 +71,8 @@ function toast({ title, body = '', type = 'info', progress = null, sticky = fals
 
   const el = document.createElement('div');
   el.className = `toast ${type === 'error' ? 'error' : ''}`;
+  // 提示条的文字调用方已经用 __() 翻过；里面常带应用名，不再让 DOM 自动翻译碰它
+  el.setAttribute('data-i18n-skip', '');
   el.dataset.key = key;
   el.dataset.at = String(Date.now());
   el.dataset.seq = String(++_toastSeq);

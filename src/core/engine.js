@@ -664,17 +664,24 @@ class Runtime {
     // 系统语言靠 emulator -prop 注入（SELinux 保护，运行时改不了），这里补的是
     // 应用级 locale / 时区，以及静默装好并启用随包带的谷歌拼音输入法。
     // 用户可在设置里关掉自动配置（engine.chineseIme=false）。
-    const locale = require('./emulator').resolveGuestLocale(this.settings.engine) || 'en-US';
+    // '' = 用户设成了 off：不碰系统语言（与改造前一致）
+    const locale = require('./emulator').resolveGuestLocale(this.settings.engine);
     const isZh = /^zh/i.test(locale);
+    const tz = isZh ? 'Asia/Shanghai' : hostTimeZone();
+    const arUi = require('../i18n').language === 'ar';
     // 阿拉伯语界面 + 非中文系统语言时，拼音输入法默认不装：除非用户在设置里明确打开过。
     // 中文界面的行为与以前完全一致。
     const imeWanted = this.settings.engine.chineseIme !== false
-      && (isZh || this.settings.engine.chineseImeChosen === true || require('../i18n').language !== 'ar');
-    if (!this._chineseReady && !isZh && !imeWanted) {
-      // 只补应用级语言与时区（时区跟随本机），不装拼音输入法
+      && (isZh || this.settings.engine.chineseImeChosen === true || !arUi);
+    // 目标语言变了（例如界面在中文 / 阿拉伯语之间来回切）：清掉「已纠正过」的标记，
+    // 否则第二次切换时会被旧标记挡住，安卓一直停在上一种语言的快照里。
+    if (!this._chineseReady) this._resetLocaleMarkersIfChanged(locale);
+    if (!this._chineseReady && !imeWanted && arUi) {
+      // 只补系统语言与时区（时区跟随本机），不装拼音输入法。
+      // 先读真实的当前语言再写 settings：先写的话 _ensureSystemLocale 会以为已经生效。
       try {
-        if (locale !== 'en-US') await client.ensureChineseLocale(locale, hostTimeZone());
-        await this._ensureSystemLocale(client, locale);
+        if (locale) await this._ensureSystemLocale(client, locale);
+        await client.ensureChineseLocale(locale, tz);
         this._chineseReady = true;
       } catch (e) {
         this.log(__('中文环境初始化跳过：{0}', e.message));
@@ -682,7 +689,7 @@ class Runtime {
     }
     if (!this._chineseReady && imeWanted) {
       try {
-        await client.ensureChineseLocale(locale, isZh ? 'Asia/Shanghai' : hostTimeZone());
+        await client.ensureChineseLocale(locale, tz);
         const path = require('path');
         const apk = path.join(this.appRoot, 'assets', 'PinyinIME.apk');
         const r = await client.ensureChineseIme(apk, {
@@ -696,7 +703,7 @@ class Runtime {
         // 恢复时会被跳过。旧快照是英文的，所以检测到系统语言不对就作废快照、
         // 让下次开机冷启动一次（带 -change-locale）。之后存的新快照就是中文的，
         // 不用再重启。marker 保证一生只纠正一次。
-        await this._ensureSystemLocale(client, locale);
+        if (locale) await this._ensureSystemLocale(client, locale);
       } catch (e) {
         this.log(__('中文环境初始化跳过：{0}', e.message));
       }
@@ -716,6 +723,23 @@ class Runtime {
    * 会被跳过。旧快照是英文的，所以检测到不对就作废快照、让下次开机冷启动一次。
    * 之后存的新快照就是中文的，不用再重启。marker 保证一生只纠正一次。
    */
+  /** 记录上一次的目标系统语言；变了就删掉所有 locale-*.done 标记，允许重新纠正一次 */
+  _resetLocaleMarkersIfChanged(locale) {
+    const fs = require('fs');
+    const path = require('path');
+    const last = path.join(store.DATA_DIR, 'locale-target.txt');
+    const want = String(locale || 'off');
+    let prev = '';
+    try { prev = fs.readFileSync(last, 'utf8').trim(); } catch (_) { /* 第一次 */ }
+    if (prev === want) return;
+    try {
+      for (const f of fs.readdirSync(store.DATA_DIR)) {
+        if (/^locale-.*\.done$/.test(f)) fs.rmSync(path.join(store.DATA_DIR, f), { force: true });
+      }
+      fs.writeFileSync(last, want);
+    } catch (_) { /* 标记只是优化，失败不影响开机 */ }
+  }
+
   async _ensureSystemLocale(client, locale) {
     const fs = require('fs');
     const path = require('path');

@@ -116,6 +116,16 @@ test('日志检测去掉 ANSI 颜色码，并忽略模拟器自己兜底的 Vulk
   assert(!/\x1b|\[0;39m/.test(errs[0]), '不应残留颜色码');
 });
 
+test('去颜色码不能误删普通文字里的「[m」', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'adlog-')), 'emu.log');
+  fs.writeFileSync(f, '[mediacodec] ERROR: decoder init failed\n');
+  const errs = require('../src/core/autodebug-probe').recentLogErrors([f]);
+  assert(errs[0] === '[mediacodec] ERROR: decoder init failed', errs[0]);
+});
+
 console.log('\n[自动检测 · 存储]');
 test('磁盘不足 2GB 是严重问题，8GB 以下是提醒', () => {
   const crit = ad.evaluate({ storage: { freeMB: 1024 } });

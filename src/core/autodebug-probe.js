@@ -71,7 +71,7 @@ function countOrphanProcesses() {
 
 /** 读最近日志文件里的错误行（最多看尾部 300 行） */
 // eslint-disable-next-line no-control-regex
-const ANSI_RE = /\x1b\[[0-9;]*[A-Za-z]|\[[0-9;]*m/g;
+const ANSI_RE = /\x1b\[[0-9;]*[A-Za-z]|\[\d+(?:;\d+)*m/g;
 function stripAnsi(s) { return String(s).replace(ANSI_RE, ''); }
 
 /**

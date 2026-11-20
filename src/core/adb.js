@@ -1135,7 +1135,8 @@ class AdbClient {
   async ensureChineseLocale(locale = 'zh-CN', timeZone = 'Asia/Shanghai') {
     const tz = /^[A-Za-z_+\-]+(\/[A-Za-z0-9_+\-]+)*$/.test(String(timeZone)) ? timeZone : 'Asia/Shanghai';
     const cmds = [
-      'settings put system system_locales ' + locale,
+      // locale 为空 = 用户关掉了语言注入：只设时区，不动系统语言
+      ...(locale ? ['settings put system system_locales ' + locale] : []),
       'setprop persist.sys.timezone ' + tz,
       // 24 小时制 + 中文常见的日期格式
       'settings put system time_12_24 24',

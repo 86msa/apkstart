@@ -16,9 +16,19 @@ const i18n = require('./i18n');
  * 带文字的常量表（诊断分类、错误说明、按键预设…）。
  * 'auto' 时跟随系统语言；app.getLocale() 在 ready 前可能是空的，退回 Intl。
  */
+/**
+ * ready 之前 app.getLocale() 拿不到值，只能退回 Intl（它跟的是「区域格式」而不是显示语言，
+ * 两者不一致时会认错）。所以 ready 之后把真实的系统语言记到这个文件里，下次启动在加载
+ * core 模块之前就能用对的值 —— 否则那些模块加载时就生成的文字表（按键预设、诊断标题…）
+ * 会和界面语言不一致。
+ */
+const UI_LOCALE_CACHE = path.join(store.DATA_DIR, 'ui-system-locale.txt');
 function systemLocale() {
   let loc = '';
-  try { loc = app.getLocale() || ''; } catch (_) { /* ready 之前 */ }
+  try { loc = app.isReady() ? (app.getLocale() || '') : ''; } catch (_) { /* ready 之前 */ }
+  if (!loc) {
+    try { loc = fs.readFileSync(UI_LOCALE_CACHE, 'utf8').trim(); } catch (_) { /* 第一次启动 */ }
+  }
   if (!loc) {
     try { loc = (app.getPreferredSystemLanguages && app.getPreferredSystemLanguages()[0]) || ''; } catch (_) { /* ignore */ }
   }
@@ -2810,9 +2820,23 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     store.ensureDirs();
-    // ready 之后 app.getLocale() 才可靠：「跟随系统」时再确认一次界面语言
-    // （此时还没有任何窗口，后面创建的窗口都会用这里定下的语言）。
-    applyUiLanguage();
+    // ready 之后 app.getLocale() 才可靠：记下来供下次启动在 ready 之前使用。
+    // 「跟随系统」且和启动时猜的语言不同（只会发生在第一次启动或系统换了语言时）：
+    // core 模块已经按旧语言加载过，直接重启一次本进程，避免界面一半中文一半阿拉伯语。
+    try {
+      const real = app.getLocale() || '';
+      if (real) {
+        fs.mkdirSync(path.dirname(UI_LOCALE_CACHE), { recursive: true });
+        fs.writeFileSync(UI_LOCALE_CACHE, real);
+      }
+      const before = i18n.language;
+      applyUiLanguage();
+      if (i18n.language !== before && !process.argv.includes('--i18n-relaunched')) {
+        app.relaunch({ args: process.argv.slice(1).concat(['--i18n-relaunched']) });
+        app.exit(0);
+        return;
+      }
+    } catch (_) { /* 语言判断失败就保持启动时的结果 */ }
     /**
      * 记下「当前是谁在管这台运行时」。
      *

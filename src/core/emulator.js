@@ -244,7 +244,10 @@ class EmulatorEngine {
     // 以前这里只看端口 → 判成「残留目录」→ 下一轮立刻 FATAL
     // "Running multiple emulators with the same AVD"（用户诊断报告里第 3 轮就是这样）。
     const lockPid = this._lockPid(avdDir);
-    if (lockPid && lockPid !== process.pid && pidAlive(lockPid)) {
+    // PID 会被 Windows 复用：强杀之前确认它真的是 qemu / emulator，
+    // 否则可能误杀用户的浏览器等无关程序。
+    if (lockPid && lockPid !== process.pid && pidAlive(lockPid)
+      && /qemu|emulator/i.test(await pidImageName(lockPid))) {
       onLog(__('清理 {0} 个残留模拟器进程', 1));
       await new Promise((r) => {
         execFile('taskkill', ['/PID', String(lockPid), '/T', '/F'], { windowsHide: true }, () => r());
@@ -1722,6 +1725,17 @@ class EmulatorEngine {
 /** 进程是否还活着（signal 0 只做存在性检查，不会真的发信号） */
 function pidAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (e) { return e && e.code === 'EPERM'; }
+}
+
+/** 进程的映像名（如 qemu-system-x86_64.exe）；查不到返回 '' */
+function pidImageName(pid) {
+  if (process.platform !== 'win32') return Promise.resolve('');
+  return new Promise((resolve) => {
+    execFile('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { windowsHide: true, timeout: 8000 }, (e, out) => {
+      const m = /^"([^"]+)","(\d+)"/m.exec(String(out || ''));
+      resolve(!e && m && Number(m[2]) === Number(pid) ? m[1] : '');
+    });
+  });
 }
 
 /** 等某个进程退出，最多 ms 毫秒 */
