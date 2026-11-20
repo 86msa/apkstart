@@ -20,18 +20,22 @@ function engineSettings() {
 function useChinaNetwork(engine) {
   const e = engine || engineSettings();
   if (e.fastDnsChosen) return e.fastDns !== false;
-  if (i18n.language === 'ar') return false;
+  // 没手动选过时：只有中文界面才默认用国内网络设置；其它语言一律视为海外用户
+  if (i18n.language !== 'zh-CN') return false;
   return e.fastDns !== false;
 }
 
-/** 「真能上网吗」探测用的主机（HTTP 80 端口，返回 204） */
+/** 「真能上网吗」探测用的主机（HTTP 80 端口，返回 204；只用于界面提示，不影响安卓的判断） */
 function connectivityHost(engine) {
   return useChinaNetwork(engine) ? 'connect.rom.miui.com' : 'connectivitycheck.gstatic.com';
 }
 
 /**
  * 写入安卓联网验证设置的 shell 命令。
- * 海外：删掉以前写进去的国内地址，恢复安卓默认（Google 的 generate_204）。
+ * 海外：删掉以前写进去的国内地址（恢复安卓默认的 Google 地址），
+ * 但 captive_portal_mode 仍设为 0（IGNORE）：安卓不再做联网验证，
+ * 直接把 Wi-Fi 当作可用——否则在 Google 探测地址被拦 / 很慢的网络（公司代理、VPN、
+ * DNS 过滤）上，系统会给 Wi-Fi 打「已连接，但无法访问互联网」，应用据此判定离线。
  */
 function captivePortalCommands(engine) {
   if (useChinaNetwork(engine)) {
@@ -44,7 +48,7 @@ function captivePortalCommands(engine) {
   return [
     'settings delete global captive_portal_http_url',
     'settings delete global captive_portal_https_url',
-    'settings delete global captive_portal_mode',
+    'settings put global captive_portal_mode 0',
   ];
 }
 

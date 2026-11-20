@@ -1107,9 +1107,9 @@ function fillSettings(s) {
   if ($('setRenderSize')) $('setRenderSize').value = eng.renderSize || 'auto';
   if ($('setDataGB')) $('setDataGB').value = String(Number(eng.dataPartitionGB || 0));
   if ($('setFastDns')) {
-    // 与 core/region.js 一致：阿拉伯语界面下没手动打开过就不用国内 DNS
-    const arUi = window.I18N && I18N.language === 'ar';
-    $('setFastDns').checked = eng.fastDnsChosen ? eng.fastDns !== false : (!arUi && eng.fastDns !== false);
+    // 与 core/region.js 一致：非中文界面下没手动打开过就不用国内 DNS
+    const zhUi = !window.I18N || I18N.language === 'zh-CN';
+    $('setFastDns').checked = eng.fastDnsChosen ? eng.fastDns !== false : (zhUi && eng.fastDns !== false);
   }
   if ($('setLocale')) {
     // 没手动选过时，阿拉伯语界面下安卓默认用英文（与 emulator.resolveGuestLocale 一致）

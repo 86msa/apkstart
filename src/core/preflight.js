@@ -426,7 +426,8 @@ function evaluate({ hw = {}, settings = {}, edition = 'installer' } = {}) {
   const driver = {
     format: 'apkstart-driver/1',
     id: `auto-${vendor}-${build || 'x'}`.toLowerCase().replace(/[^a-z0-9._-]/g, '-'),
-    name: __('本机自动配置（{0}）', gpu.name || vendor),
+    // 驱动名上限 80 字（drivers.validateDriver）：译文前缀更长、显卡名也可能很长，截断兜底
+    name: __('本机自动配置（{0}）', String(gpu.name || vendor).slice(0, 40)).slice(0, 80),
     version: '1.0.0',
     author: __('ApkStart 体检'),
     description: __('由「本机体检 · 自动配置」生成：{0}。{1}', gpuRec.why, v.accelOk ? __('硬件加速可用。') : __('当前无硬件加速。')),

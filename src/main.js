@@ -40,7 +40,11 @@ function systemLocale() {
 function applyUiLanguage() {
   let pref = 'auto';
   try { pref = store.getSettings().uiLanguage || 'auto'; } catch (_) { /* 读不到设置就跟随系统 */ }
-  return i18n.setLanguage(i18n.resolve(pref, systemLocale()));
+  // 系统语言既不是中文也不是阿拉伯语（例如阿拉伯国家常见的英文 Windows）时，
+  // 用 package.json 里 apkstart.defaultLanguage 指定的语言（阿拉伯语版本为 ar）
+  let fallback = '';
+  try { fallback = (require('../package.json').apkstart || {}).defaultLanguage || ''; } catch (_) { /* 没配置就回落中文 */ }
+  return i18n.setLanguage(i18n.resolve(pref, systemLocale(), fallback));
 }
 applyUiLanguage();
 /** 网页（主界面 / 启动画面 / 应用壳窗口）通过 ?lang= 拿到当前语言 */
@@ -2273,9 +2277,16 @@ function registerIpc() {
    * Windows 上 noLink:false 会把非通用按钮显示成大号命令链接，按钮文字里 \n 之后是说明小字。
    */
   ipcMain.handle('app:choose', async (_e, opts = {}) => {
-    const buttons = (Array.isArray(opts.buttons) ? opts.buttons : []).map((b) => String(b)).slice(0, 12);
+    let buttons = (Array.isArray(opts.buttons) ? opts.buttons : []).map((b) => String(b));
     if (!buttons.length) return { response: -1 };
-    const cancelId = Number.isInteger(opts.cancelId) ? opts.cancelId : buttons.length - 1;
+    let cancelId = Number.isInteger(opts.cancelId) && opts.cancelId >= 0 && opts.cancelId < buttons.length
+      ? opts.cancelId : buttons.length - 1;
+    // 系统对话框放不下太多按钮：超过 12 个时截断，但保留「取消」按钮
+    if (buttons.length > 12) {
+      const cancelLabel = buttons[cancelId];
+      buttons = buttons.filter((_, i) => i !== cancelId).slice(0, 11).concat([cancelLabel]);
+      cancelId = buttons.length - 1;
+    }
     const { response } = await dialog.showMessageBox(mainWindow || undefined, {
       type: 'question',
       title: opts.title || __('确认'),

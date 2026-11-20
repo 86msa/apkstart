@@ -45,10 +45,13 @@
     return '';
   }
 
-  /** pref = 设置里的 uiLanguage（'auto' 或语言码），systemLocale = 系统语言 */
-  function resolve(pref, systemLocale) {
+  /**
+   * pref = 设置里的 uiLanguage（'auto' 或语言码），systemLocale = 系统语言，
+   * fallback = 系统语言既不是中文也不是阿拉伯语时用哪种（例如英文 Windows）。
+   */
+  function resolve(pref, systemLocale, fallback) {
     if (pref && pref !== 'auto') return normalize(pref) || SOURCE;
-    return normalize(systemLocale) || SOURCE;
+    return normalize(systemLocale) || normalize(fallback) || SOURCE;
   }
 
   function register(code, d) {

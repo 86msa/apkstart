@@ -36,6 +36,7 @@ async function test(name, fn) {
   await test('仓库还没发布任何版本（404）→「没有更新」而不是「连不上」', async () => {
     const s = new Sources(() => ({ runtime: {} }), { github: 'someone/fork', gitee: '' });
     s.fetchReleases = async () => [{ source: 'github', name: 'GitHub', error: 'HTTP 404 Not Found' }];
+    s._repoExists = async () => true;
     const r = await s.latest({ force: true });
     assert.equal(r.noRelease, true);
     const u = new Updater({ currentVersion: '0.6.3', dataDir: '/tmp', exePath: '/tmp/x/ApkStart.exe', settings: () => ({}) });
@@ -44,6 +45,13 @@ async function test(name, fn) {
     const c = await u.check({ force: true });
     assert.equal(c.hasUpdate, false);
     assert.equal(c.noRelease, true);
+  });
+
+  await test('仓库地址写错 / 被删（仓库本身也 404）→ 如实报错，不显示「已是最新」', async () => {
+    const s = new Sources(() => ({ runtime: {} }), { github: 'someone/missing', gitee: '' });
+    s.fetchReleases = async () => [{ source: 'github', name: 'GitHub', error: 'HTTP 404 Not Found' }];
+    s._repoExists = async () => false;
+    await assert.rejects(() => s.latest({ force: true }));
   });
 
   await test('真正连不上（非 404）仍然报错，不会被当成「已是最新」', async () => {

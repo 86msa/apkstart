@@ -271,6 +271,20 @@ class Sources {
     return m ? decodeURIComponent(m[1]) : '';
   }
 
+  /**
+   * 仓库本身是否存在（releases 接口 404 时用来区分「还没发布版本」和「仓库地址写错 / 被删 / 改名」）。
+   * 任何一个已配置的源能读到仓库信息就算存在；读不到一律按不存在处理，让上层如实报错。
+   */
+  async _repoExists() {
+    for (const s of Object.values(this.defs)) {
+      try {
+        const info = await getJson(s.api, 9000);
+        if (info && (info.full_name || info.name || info.id)) return true;
+      } catch (_) { /* 换下一个源 */ }
+    }
+    return false;
+  }
+
   /** 用 tag 拼一份「最小可用」的 release（没有 API 时用） */
   _syntheticRelease(id, tag) {
     const s = this.defs[id];
@@ -367,7 +381,8 @@ class Sources {
     const ok = all.filter((x) => x && x.rel);
     // 仓库存在但还没发布过任何版本（API 回 404、列表为空、也没有 latest 跳转）：
     // 这不是「连不上」，而是「没有更新」，如实告诉上层，界面显示「已是最新版本」。
-    if (!ok.length && all.length && all.every((x) => x && /\b404\b|Not Found/i.test(String(x.error || '')))) {
+    if (!ok.length && all.length && all.every((x) => x && /\b404\b|Not Found/i.test(String(x.error || '')))
+      && await this._repoExists()) {
       const none = {
         version: '', tag: '', name: '', notes: '', htmlUrl: '', publishedAt: '',
         assets: [], sources: [], unreachable: [], noRelease: true,

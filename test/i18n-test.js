@@ -42,6 +42,10 @@ test('语言码归一：ar-SA / ar_EG → ar，zh-TW → zh-CN，其它回落源
   assert.equal(i18n.resolve('auto', 'en-US'), 'zh-CN');
   assert.equal(i18n.resolve('zh-CN', 'ar-AE'), 'zh-CN', '手动选择优先于系统语言');
   assert.equal(i18n.resolve('ar', 'en-US'), 'ar');
+  // 系统语言既不是中文也不是阿拉伯语（英文 Windows）：用版本指定的默认语言
+  assert.equal(i18n.resolve('auto', 'en-US', 'ar'), 'ar');
+  assert.equal(i18n.resolve('auto', 'zh-CN', 'ar'), 'zh-CN', '中文 Windows 仍是中文');
+  assert.equal(require('../package.json').apkstart.defaultLanguage, 'ar');
 });
 
 test('阿拉伯语：翻译 + 占位符替换 + RTL', () => {
@@ -126,7 +130,10 @@ test('网络地区：中文界面用国内 DNS / 端点，阿拉伯语界面用�
   i18n.setLanguage('ar');
   assert.equal(region.useChinaNetwork({ fastDns: true }), false, '海外默认不用国内 DNS');
   assert.equal(region.connectivityHost({ fastDns: true }), 'connectivitycheck.gstatic.com');
-  assert.ok(region.captivePortalCommands({ fastDns: true }).every((c) => /settings delete/.test(c)), '海外恢复安卓默认验证地址');
+  const cmds = region.captivePortalCommands({ fastDns: true });
+  assert.ok(cmds.some((c) => /settings delete global captive_portal_http_url/.test(c)), '海外删掉国内验证地址');
+  assert.ok(cmds.includes('settings put global captive_portal_mode 0'), '海外仍关闭联网验证，避免被标「无网络」');
+  assert.ok(!cmds.some((c) => /miui/.test(c)), '海外不再写国内地址');
   assert.equal(region.useChinaNetwork({ fastDns: true, fastDnsChosen: true }), true, '手动打开就听用户的');
   i18n.setLanguage('zh-CN');
 });
