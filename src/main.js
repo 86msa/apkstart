@@ -980,7 +980,11 @@ function openManual(payload = {}) {
       });
     }
     manualWindow.setTitle(__('ApkStart 使用手册 · {0}', target.title));
-    manualWindow.loadFile(path.join(__dirname, 'ui', 'manual.html'), { hash: target.anchor });
+    // 阿拉伯语界面打开整页翻译的阿拉伯语手册（锚点与中文版一致）；
+    // 网络问题在阿拉伯语手册里有专门一节（6.9，讲海外 DNS / 联网验证）。
+    const arManual = i18n.language === 'ar' && fs.existsSync(path.join(__dirname, 'ui', 'manual.ar.html'));
+    const hash = arManual && target.id === 'network' ? '6-9-network' : target.anchor;
+    manualWindow.loadFile(path.join(__dirname, 'ui', arManual ? 'manual.ar.html' : 'manual.html'), { hash });
     manualWindow.once('ready-to-show', () => {
       if (!manualWindow || manualWindow.isDestroyed()) return;
       manualWindow.show();
@@ -992,7 +996,9 @@ function openManual(payload = {}) {
   } catch (e) {
     appLog(`manual open failed: ${e && e.message}`);
     // 手册打不开也不能影响修复流程：至少给个能点的在线地址
-    shell.openExternal('https://github.com/RoutineMiku/apkstart#readme').catch(() => {});
+    shell.openExternal(i18n.language === 'ar'
+      ? 'https://github.com/86msa/apkstart'
+      : 'https://github.com/RoutineMiku/apkstart#readme').catch(() => {});
   }
   return target;
 }

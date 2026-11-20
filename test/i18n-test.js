@@ -129,5 +129,21 @@ test('网络地区：中文界面用国内 DNS / 端点，阿拉伯语界面用�
   i18n.setLanguage('zh-CN');
 });
 
+test('阿拉伯语手册：每个自动教程锚点都存在，页面从右到左，正文没有残留中文', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'src', 'ui', 'manual.ar.html'), 'utf8');
+  assert.ok(/<html lang="ar" dir="rtl">/.test(html), '手册要声明 lang=ar dir=rtl');
+  const { TOPICS } = require('../src/core/manual');
+  for (const t of Object.values(TOPICS)) {
+    assert.ok(html.includes(`id="${t.anchor}"`), `缺锚点 ${t.anchor}`);
+  }
+  assert.ok(html.includes('id="6-9-network"'), '阿拉伯语手册要有网络专章');
+  // 去掉标签属性（id / href 里的锚点本来就是中文）后，正文不应再有中文
+  const text = html.replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/g, '').replace(/<[^>]+>/g, ' ');
+  const cjk = (text.match(/[\u4e00-\u9fff]+/g) || []).filter((x) => !/日常/.test(x));
+  assert.deepEqual(cjk, [], `正文残留中文：${cjk.slice(0, 5).join(' / ')}`);
+  const main = fs.readFileSync(path.join(ROOT, 'src', 'main.js'), 'utf8');
+  assert.ok(/manual\.ar\.html/.test(main), '阿拉伯语界面要打开阿拉伯语手册');
+});
+
 console.log(`\n结果：${passed} 通过，${failed} 失败`);
 process.exit(failed ? 1 : 0);

@@ -5,14 +5,32 @@
 import html
 import os
 import re
+import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-SRC = os.path.join(HERE, 'USER-MANUAL.md')
-OUT = os.path.join(HERE, 'ApkStart-用户手册.html')
-# 0.6.2 起手册内嵌进软件：同一份 HTML 也要落到 src/ui，随包分发。
-# 主进程打开的就是这一份，绝不依赖 docs/ 或外部文件。
-APP_OUT = os.path.join(ROOT, 'src', 'ui', 'manual.html')
+# 语言：默认中文；`python docs/build-manual-html.py ar` 生成阿拉伯语版（从右到左）。
+# 阿拉伯语版的标题用 `{#id}` 显式写出锚点，保证和中文版 id 一致——
+# src/core/manual.js 的自动教程按这些锚点定位章节。
+LANG = (sys.argv[1] if len(sys.argv) > 1 else 'zh').lower()
+if LANG == 'ar':
+    SRC = os.path.join(HERE, 'USER-MANUAL.ar.md')
+    OUT = os.path.join(HERE, 'ApkStart-UserManual-ar.html')
+    APP_OUT = os.path.join(ROOT, 'src', 'ui', 'manual.ar.html')
+else:
+    SRC = os.path.join(HERE, 'USER-MANUAL.md')
+    OUT = os.path.join(HERE, 'ApkStart-用户手册.html')
+    # 0.6.2 起手册内嵌进软件：同一份 HTML 也要落到 src/ui，随包分发。
+    # 主进程打开的就是这一份，绝不依赖 docs/ 或外部文件。
+    APP_OUT = os.path.join(ROOT, 'src', 'ui', 'manual.html')
+
+UI = {
+    'zh': {'lang': 'zh-CN', 'dir': 'ltr', 'title': 'ApkStart 产品使用手册与问题解决方案', 'toc': '目录',
+           'filter': '筛选目录（Ctrl+F 全文搜索）', 'print': '打印 / 存为 PDF'},
+    'ar': {'lang': 'ar', 'dir': 'rtl', 'title': 'دليل استخدام ApkStart وحلول المشكلات', 'toc': 'المحتويات',
+           'filter': 'تصفية المحتويات (Ctrl+F للبحث في النص)', 'print': 'طباعة / حفظ PDF'},
+}[LANG if LANG == 'ar' else 'zh']
+ARABIC = re.compile(r'[\u0600-\u06ff]')
 
 with open(SRC, encoding='utf-8') as f:
     lines = f.read().split('\n')
@@ -54,7 +72,9 @@ while i < n:
             in_code = True
             code_buf = []
         else:
-            out.append('<pre><code>' + html.escape('\n'.join(code_buf)) + '</code></pre>')
+            # 代码块里是阿拉伯语说明（流程图 / 命令说明）时从右到左排，纯命令保持从左到右
+            pre_dir = ' dir="rtl"' if ARABIC.search('\n'.join(code_buf)) else ' dir="ltr"' if LANG == 'ar' else ''
+            out.append('<pre%s><code>' % pre_dir + html.escape('\n'.join(code_buf)) + '</code></pre>')
             in_code = False
         i += 1
         continue
@@ -74,7 +94,14 @@ while i < n:
     if m:
         lvl = len(m.group(1))
         text = m.group(2).strip()
-        anchor = slug(text, used)
+        mid = re.search(r'\s*\{#([^}\s]+)\}\s*$', text)
+        if mid:
+            # 显式锚点：`## 标题 {#id}`
+            text = text[:mid.start()].strip()
+            anchor = mid.group(1)
+            used.add(anchor)
+        else:
+            anchor = slug(text, used)
         if lvl in (2, 3):
             toc.append((lvl, anchor, text))
         out.append('<h%d id="%s">%s</h%d>' % (lvl, anchor, inline(text), lvl))
@@ -151,11 +178,11 @@ for lvl, anchor, text in toc:
 toc_html = '\n'.join(toc_html)
 
 doc = '''<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="__LANG__"__DIRATTR__>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ApkStart 产品使用手册与问题解决方案</title>
+<title>__TITLE__</title>
 <style>
 :root{--bg:#ffffff;--fg:#1f2328;--mut:#57606a;--line:#d0d7de;--code:#eff1f3;--accent:#0969da;--accent-soft:#ddf4ff;--warn:#9a6700;--warn-bg:#fff8c5;--head:#f6f8fa;--tbl:#f6f8fa}
 *{box-sizing:border-box}
@@ -193,19 +220,19 @@ tbody tr:nth-child(even){background:#fbfcfd}
 .btnbar button:hover{border-color:var(--accent);color:var(--accent)}
 @media (max-width:880px){aside{display:none}main{padding:24px 20px 60px}h1{font-size:25px}}
 @media print{aside,.btnbar{display:none}main{padding:0;max-width:none}h2{page-break-after:avoid}table,pre,blockquote{page-break-inside:avoid}a{color:inherit;text-decoration:none}}
-</style>
+__RTL_CSS__</style>
 </head>
 <body>
 <div class="wrap">
-<aside><h2>目录</h2>
-<input id="tocSearch" type="search" placeholder="筛选目录（Ctrl+F 全文搜索）" autocomplete="off" />
+<aside><h2>__TOC_TITLE__</h2>
+<input id="tocSearch" type="search" placeholder="__FILTER__" autocomplete="off" />
 <div id="tocList">__TOC__</div>
 </aside>
 <main>
 __BODY__
 </main>
 </div>
-<div class="btnbar"><button onclick="window.print()">打印 / 存为 PDF</button></div>
+<div class="btnbar"><button onclick="window.print()">__PRINT__</button></div>
 <script>
 (function () {
   var input = document.getElementById('tocSearch');
@@ -226,7 +253,22 @@ __BODY__
 </html>
 '''
 
-doc = doc.replace('__TOC__', toc_html).replace('__BODY__', body)
+RTL_CSS = '''[dir=rtl] body{font-family:"Segoe UI",Tahoma,"Noto Sans Arabic",Arial,sans-serif}
+[dir=rtl] aside{border-right:0;border-left:1px solid var(--line)}
+[dir=rtl] .toc-l3{padding-left:8px!important;padding-right:22px!important}
+[dir=rtl] blockquote{border-left:0;border-right:4px solid var(--warn);border-radius:8px 0 0 8px}
+[dir=rtl] ul,[dir=rtl] ol{padding-left:0;padding-right:26px}
+[dir=rtl] th,[dir=rtl] td{text-align:right}
+[dir=rtl] .btnbar{right:auto;left:22px}
+[dir=rtl] code{direction:ltr;unicode-bidi:isolate}
+[dir=rtl] pre[dir=ltr]{text-align:left}
+[dir=rtl] pre[dir=rtl] code{direction:rtl;unicode-bidi:normal}
+[dir=rtl] #tocSearch{text-align:right}
+''' if LANG == 'ar' else ''
+doc = (doc.replace('__TOC__', toc_html).replace('__BODY__', body)
+       .replace('__LANG__', UI['lang']).replace('__DIRATTR__', ' dir="rtl"' if UI['dir'] == 'rtl' else '').replace('__TITLE__', UI['title'])
+       .replace('__TOC_TITLE__', UI['toc']).replace('__FILTER__', UI['filter']).replace('__PRINT__', UI['print'])
+       .replace('__RTL_CSS__', RTL_CSS))
 for target in (OUT, APP_OUT):
     with open(target, 'w', encoding='utf-8') as f:
         f.write(doc)
